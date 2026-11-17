@@ -16,12 +16,13 @@ From this directory, install the packages listed in `requirements.txt` and run:
 Open [http://127.0.0.1:8502](http://127.0.0.1:8502). If port 8502 is occupied,
 choose another local port and update the URL accordingly.
 
-## Deploy on Streamlit Community Cloud
+## Live app
 
-Create a GitHub repository containing this project, then create a new app in
-Streamlit Community Cloud with the repository, `main` branch, and `app.py` as
-the entry point. Keep `requirements.txt` at the repository root so Cloud can
-install the app dependencies.
+[HR SIMULATE on Streamlit Community Cloud](https://hr-simulate.streamlit.app)
+
+To deploy a fork, create a new Streamlit Community Cloud app using the GitHub
+repository, `main` branch, and `app.py` as the entry point. Keep
+`requirements.txt` at the repository root so Cloud can install the dependencies.
 
 The project environment uses Python 3.13. The main app uses NumPy and native
 Python records instead of importing Pandas or rendering Arrow-backed Streamlit

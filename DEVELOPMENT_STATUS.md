@@ -15,6 +15,7 @@
 - Added CSV/Excel upload preview, missing-value/duplicate reporting, and data downloads.
 - Added KPI, simulation-series, Excel, and optional PDF report exports.
 - Added methodology, limitations, and glossary documentation.
+- Published the deployable project to the public `main` branch and deployed it to Streamlit Community Cloud at `https://hr-simulate.streamlit.app`.
 - Added focused tests for all seven simulation outputs, vacancy caps, input sensitivity, reproducibility, and invalid module names.
 - Removed the main app's Pandas/Arrow-backed rendering path to keep it operational under the host's PyArrow DLL policy; tables use escaped HTML and CSV/Excel processing uses the standard library and OpenPyXL.
 
@@ -43,6 +44,7 @@
 - All seven module pages and PDF report rendering pass after the visual redesign; chart color and label styles use the shared theme configuration.
 - `app.py` and `engines/simulation_core.py` pass Python syntax compilation.
 - Streamlit health endpoint returns HTTP 200 on port 8502; browser checks confirm the redesigned dashboard and recruitment funnel render with current simulation output.
+- Streamlit Community Cloud deployment starts successfully and serves the dashboard at the public app URL.
 - Streamlit AppTest smoke-tests every sidebar destination and all seven module runs; recruitment scenario save, reset, and staged-progress actions pass.
 - Browser viewport checks at 900, 1366, and 1920 pixels report no horizontal page overflow.
 - The main app and simulation engine no longer import Pandas, avoiding the blocked PyArrow extension. Legacy modules still list Pandas as a dependency.
