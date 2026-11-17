@@ -90,6 +90,14 @@ st.markdown(
     [data-testid="stAlert"] svg { color:var(--text); fill:var(--text); }
     [data-baseweb="menu"], [data-baseweb="popover"] { background:var(--panel); color:var(--text); }
     .small-note { color:var(--muted); font-size:.84rem; }
+    [data-testid="stAppViewContainer"]::after {
+        content:"Made by Udit Ranjan Medhi";
+        position:fixed; right:18px; bottom:10px; z-index:999;
+        color:rgba(203,213,225,.78); background:rgba(11,18,32,.82);
+        border:1px solid rgba(71,85,105,.72); border-radius:999px;
+        padding:6px 10px; font-size:.7rem; font-weight:600; letter-spacing:.02em;
+        pointer-events:none; backdrop-filter:blur(6px);
+    }
     @media (max-width: 1100px) {
       .main .block-container { padding:1.2rem 1rem 2rem; }
       [data-testid="stMetric"] { padding:.85rem; }
@@ -99,6 +107,7 @@ st.markdown(
       .main .block-container { padding:.8rem .7rem 1.5rem; }
       h1 { font-size:1.55rem; }
       .status-row { gap:5px; }
+      [data-testid="stAppViewContainer"]::after { right:8px; bottom:7px; font-size:.65rem; }
     }
     </style>
     """,

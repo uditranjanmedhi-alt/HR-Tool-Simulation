@@ -15,6 +15,7 @@
 - Added CSV/Excel upload preview, missing-value/duplicate reporting, and data downloads.
 - Added KPI, simulation-series, Excel, and optional PDF report exports.
 - Added methodology, limitations, and glossary documentation.
+- Added a subtle fixed “Made by Udit Ranjan Medhi” watermark across app pages.
 - Published the deployable project to the public `main` branch and deployed it to Streamlit Community Cloud at `https://hr-simulate.streamlit.app`.
 - Added focused tests for all seven simulation outputs, vacancy caps, input sensitivity, reproducibility, and invalid module names.
 - Removed the main app's Pandas/Arrow-backed rendering path to keep it operational under the host's PyArrow DLL policy; tables use escaped HTML and CSV/Excel processing uses the standard library and OpenPyXL.
