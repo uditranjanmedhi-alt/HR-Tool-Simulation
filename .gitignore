@@ -1,0 +1,16 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+*.log
+*.sqlite3
+*.db
+*.pdf
+*.xlsx
+*.py[cod]
