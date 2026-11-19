@@ -42,7 +42,9 @@ the existing legacy module files, but is not imported by the main dashboard.
 - Session-only scenario saving and comparison (up to five scenarios).
 - Seven educational manager case studies and transparent checklist scoring.
 - Seed-reproducible, synthetic datasets for all seven modules with CSV and Excel downloads.
-- CSV/Excel preview, explicit Excel worksheet selection, column-to-input mapping, data validation/cleaning choices, and confirmed uploaded-data simulations with provenance.
+- CSV/Excel preview, explicit worksheet selection, and two upload modes: Aggregate Parameter Mode for mapped scalar simulations and schema-gated Record-Level Analysis Mode for descriptive distributions.
+- Record-level compensation, attrition, performance, and training summaries, with optional matched performance period/group comparisons where required fields are present.
+- Confirmed aggregate simulations with mapping, cleaning, and provenance; record-level comparisons are clearly descriptive, not causal.
 - Offline rule-based recommendations and CSV, Excel, and PDF result exports.
 - Synthetic dashboard indicators are labelled illustrative.
 

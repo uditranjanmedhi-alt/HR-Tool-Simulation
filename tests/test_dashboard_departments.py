@@ -115,6 +115,49 @@ class DashboardDepartmentTests(unittest.TestCase):
         self.assertEqual(app.session_state["uploaded_data"]["columns"], ["employee_id", "salary"])
         self.assertEqual(app.session_state["uploaded_data"]["rows"], [["E1", 50000]])
 
+    def test_record_level_upload_mode_shows_supported_analysis_and_unavailable_schema(self):
+        app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+        app.session_state["uploaded_source"] = {
+            "name": "performance.csv",
+            "content": (
+                b"employee_id,department,appraisal_period,performance_rating,goal_achievement\n"
+                b"E1,HR,2025,3.0,0.7\nE1,HR,2026,4.0,0.8\n"
+            ),
+        }
+        next(item for item in app.button if item.key == "nav_Data Management").click()
+        app.run()
+        next(item for item in app.selectbox
+             if item.key == "uploaded_module").set_value("Performance Management")
+        next(item for item in app.radio
+             if item.label == "Choose how to use the selected dataset").set_value(
+                 "Record-Level Analysis Mode"
+             )
+        app.run()
+        self.assertFalse(app.exception, [item.message for item in app.exception])
+        self.assertTrue(any("Record-Level Analysis Mode" in item.value for item in app.markdown))
+        comparison_checkbox = next(
+            item for item in app.checkbox
+            if item.label == "Compare matched employee ratings across appraisal periods"
+        )
+        comparison_checkbox.set_value(True)
+        app.run(timeout=60)
+        self.assertFalse(app.exception, [item.message for item in app.exception])
+        self.assertTrue(any(
+            "Matched appraisal-period comparison" in item.value for item in app.markdown
+        ))
+
+        next(item for item in app.selectbox
+             if item.key == "uploaded_module").set_value("Employee Attrition & Retention")
+        app.session_state["uploaded_source"] = {
+            "name": "employees.csv",
+            "content": b"employee_id,department,hire_date,tenure_months\nE1,HR,2024-01-01,12\n",
+        }
+        app.run()
+        self.assertFalse(app.exception, [item.message for item in app.exception])
+        self.assertTrue(any(
+            "lacks: exit_date" in item.value for item in app.info
+        ))
+
     def test_monte_carlo_and_sensitivity_controls_render_results(self):
         app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
         next(item for item in app.button

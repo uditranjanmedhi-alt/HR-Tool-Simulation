@@ -2,39 +2,38 @@
 
 ## Scope
 
-Validation covers the active Streamlit entry point and the seven calculations
-used by it, data generators, upload mapping and cleaning logic, and local
-dependency consistency.
+Validation covers the active Streamlit entry point and seven simulation
+modules, record-level analysis and aggregate upload flows, schema validation,
+synthetic datasets, sensitivity and Monte Carlo calculations, AppTest
+navigation/runs, and dependency consistency.
 
-## Current checks
+## Commands
 
-Run the following from the `hr_simulate` project directory:
+Run from the `hr_simulate` project directory using the installed project
+environment:
 
 ```powershell
-.\.venv\Scripts\python.exe -m py_compile app.py engines\simulation_core.py data\synthetic_generator.py data\upload_pipeline.py data\data_loader.py data\data_validator.py
+.\.venv\Scripts\python.exe -m compileall -q .
 .\.venv\Scripts\python.exe -m unittest discover -s tests -v
 .\.venv\Scripts\python.exe -m pip check
 ```
 
 ## Results (2026-11-19)
 
-- Python compilation succeeded for all listed files.
-- The full test suite passed: 23 tests.
+- `compileall -q .` completed successfully.
+- The complete unittest suite passed: 36 tests.
+- Streamlit AppTest coverage passed for dashboard controls, all seven module
+  runs, Aggregate Parameter Mode, Record-Level Analysis Mode, missing-schema
+  handling, upload mapping/provenance, exports, Monte Carlo, and sensitivity.
 - `pip check` reported no broken requirements.
 
-The test suite checks module results, formula-level attrition/workforce/L&D
-outputs, queue invariants, fixed-seed reproducibility, synthetic data
-reproducibility and exports, mapping/cleaning/provenance, navigation, module
-execution, and uploaded data flowing through the Streamlit UI into a simulation.
+The full suite also verifies recruitment actual-spend and zero-hire handling,
+attrition denominators and cohort accounting, employee-relations queue
+conservation and censored waits, performance reward allocation, record-level
+paired summaries, bounded sensitivity inputs, stochastic reproducibility, and
+zero-volume boundaries.
 
-## Environment notes
-
-The local Python 3.13 environment previously used for deployment testing is
-`hr_simulate\.venv`. Streamlit's dependency graph includes Pandas and PyArrow,
-but the deployed app's active code path avoids importing Pandas or rendering
-Arrow-backed tables. The app uses standard-library CSV, OpenPyXL, NumPy,
-Plotly, SimPy, Streamlit, and optional ReportLab for its active functionality.
-
-Passing local tests does not independently verify a new Streamlit Community
-Cloud build; Cloud deployment logs and the live app must be checked after
-publishing code.
+The project environment is Python 3.13 at `hr_simulate\\.venv`. Streamlit's
+dependency graph includes Pandas and PyArrow, but the active app path avoids
+Pandas-backed rendering. Passing local tests does not independently verify a
+new Streamlit Community Cloud build.

@@ -5,7 +5,7 @@ from __future__ import annotations
 from math import isfinite
 from typing import Any
 
-from .schema import NUMERIC_COLUMNS, SCHEMA
+from .schema import NULLABLE_COLUMNS, NUMERIC_COLUMNS, SCHEMA
 
 
 def _records(data: Any) -> list[dict]:
@@ -23,10 +23,12 @@ def validate_dataframe(data: Any, entity: str) -> dict:
     records = _records(data)
     columns = list(records[0]) if records else []
     required = SCHEMA[entity]
+    nullable = NULLABLE_COLUMNS.get(entity, set())
     missing_columns = [column for column in required if column not in columns]
     missing_cells = sum(
         value is None or (isinstance(value, str) and not value.strip())
-        for row in records for key, value in row.items() if key in required
+        for row in records for key, value in row.items()
+        if key in required and key not in nullable
     )
     id_column = next(
         (column for column in required if column.lower().endswith("id") and column in columns),

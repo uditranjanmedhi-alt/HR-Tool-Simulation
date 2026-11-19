@@ -1,5 +1,6 @@
 import unittest
 
+from data.upload_pipeline import DEFAULT_SIMULATION_PARAMS
 from engines.simulation_core import (
     MODULES,
     run_monte_carlo,
@@ -58,6 +59,17 @@ class SimulationCoreTests(unittest.TestCase):
         values = {row["KPI"]: row["Value"] for row in first["kpis"]}
         higher_values = {row["KPI"]: row["Value"] for row in higher["kpis"]}
         self.assertGreater(higher_values["Total Compensation Cost"], values["Total Compensation Cost"])
+        self.assertAlmostEqual(
+            values["Compensation Increase (%)"],
+            100 * (values["Total Compensation Cost"] / values["Base Payroll"] - 1),
+            places=1,
+        )
+        self.assertAlmostEqual(
+            values["Total Compensation Cost"],
+            values["Base Payroll"] + values["Increment Cost"]
+            + values["Bonus Cost"] + values["Benefits Cost"],
+            places=1,
+        )
 
     def test_budget_and_development_inputs_change_simulated_outputs(self):
         recruitment = {
@@ -86,6 +98,36 @@ class SimulationCoreTests(unittest.TestCase):
         improved_kpis = {row["KPI"]: row["Value"] for row in improved["kpis"]}
         self.assertGreater(improved_kpis["Average Performance Score After Intervention"],
                            baseline_kpis["Average Performance Score After Intervention"])
+        high_performers = round(baseline_kpis["High Performer Share (%)"] * performance["employees"] / 100)
+        expected_rewards = performance["reward_budget"] if high_performers else 0
+        self.assertEqual(baseline_kpis["Rewards Allocated"], expected_rewards)
+        self.assertEqual(
+            baseline_kpis["Average Reward per High Performer"],
+            round(expected_rewards / high_performers, 2) if high_performers else 0,
+        )
+        self.assertTrue(any("do not establish" in note for note in baseline["notes"]))
+
+    def test_recruitment_cost_per_hire_uses_actual_spend_and_effort_units(self):
+        params = {
+            "vacancies": 20, "applicants": 5, "recruiters": 2, "interviewers": 2,
+            "budget": 250, "cost_per_applicant": 100, "screen_rate": 1,
+            "shortlist_rate": 1, "dropout_rate": 0, "offer_rate": 1,
+            "acceptance_rate": 1, "joining_rate": 1, "screen_capacity": 10,
+            "screen_days": .5, "interview_days": 1,
+        }
+        result = run_simulation("Recruitment & Talent Acquisition", params, seed=3)
+        values = {row["KPI"]: row["Value"] for row in result["kpis"]}
+        self.assertEqual(values["Candidates Within Recruitment Budget"], 2)
+        self.assertEqual(values["Actual Recruitment Spend"], 200)
+        self.assertEqual(values["Cost per Hire"], 100)
+        self.assertEqual(values["Estimated Recruitment Processing Effort (person-days)"], 3)
+
+        no_hires = run_simulation(
+            "Recruitment & Talent Acquisition", {**params, "joining_rate": 0}, seed=3,
+        )
+        no_hire_values = {row["KPI"]: row["Value"] for row in no_hires["kpis"]}
+        self.assertEqual(no_hire_values["Actual Recruitment Spend"], 200)
+        self.assertIsNone(no_hire_values["Cost per Hire"])
 
     def test_invalid_module_is_rejected(self):
         with self.assertRaises(ValueError):
@@ -102,6 +144,9 @@ class SimulationCoreTests(unittest.TestCase):
         self.assertEqual(values["Final Workforce"], 3)
         self.assertEqual(values["Total Hires"], 3)
         self.assertEqual(values["Net Workforce Change"], -7)
+        self.assertEqual(values["Original Cohort Exits"], 10)
+        self.assertEqual(values["Period Workforce Attrition (%)"], 100)
+        self.assertNotIn("Retention Rate (%)", values)
         for month in result["series"]:
             self.assertEqual(
                 month["Opening Workforce"] + month["Hires"] - month["Exits"],
@@ -111,6 +156,47 @@ class SimulationCoreTests(unittest.TestCase):
                 month["Voluntary Exits"] + month["Involuntary Exits"] + month["Retirement Exits"],
                 month["Exits"],
             )
+            self.assertEqual(month["Original Cohort Exits"] + month["Original Cohort Remaining"],
+                             10 if month["Month"] == 1 else result["series"][month["Month"] - 2]["Original Cohort Remaining"])
+
+    def test_attrition_rate_denominators_are_distinct_and_exposure_based(self):
+        params = {
+            "workforce": 100, "months": 6, "voluntary": .03, "involuntary": .01,
+            "retirement": .005, "hires": 4, "replacement_cost": 100,
+        }
+        result = run_simulation("Employee Attrition & Retention", params, seed=19)
+        values = {row["KPI"]: row["Value"] for row in result["kpis"]}
+        exposure = sum(row["Opening Workforce"] for row in result["series"])
+        exits = sum(row["Exits"] for row in result["series"])
+        period_survival = 1.0
+        for row in result["series"]:
+            if row["Opening Workforce"]:
+                period_survival *= 1 - row["Exits"] / row["Opening Workforce"]
+        original_exits = sum(row["Original Cohort Exits"] for row in result["series"])
+        original_remaining = result["series"][-1]["Original Cohort Remaining"]
+        self.assertAlmostEqual(values["Monthly Attrition Rate (%)"], 100 * exits / exposure, places=2)
+        monthly_rate = exits / exposure
+        self.assertAlmostEqual(
+            values["Annualized Attrition Rate (%)"],
+            100 * (1 - (1 - monthly_rate) ** 12),
+            places=2,
+        )
+        self.assertAlmostEqual(values["Period Workforce Attrition (%)"], 100 * (1 - period_survival), places=2)
+        self.assertEqual(values["Original Cohort Exits"], original_exits)
+        self.assertEqual(original_exits + original_remaining, params["workforce"])
+        self.assertAlmostEqual(
+            values["Original Cohort Retention (%)"],
+            100 * original_remaining / params["workforce"],
+            places=2,
+        )
+        zero_start = run_simulation("Employee Attrition & Retention", {
+            "workforce": 0, "months": 2, "voluntary": 1, "involuntary": 0,
+            "retirement": 0, "hires": 3, "replacement_cost": 0,
+        }, seed=1)
+        zero_start_values = {row["KPI"]: row["Value"] for row in zero_start["kpis"]}
+        self.assertEqual(zero_start_values["Original Cohort Exits"], 0)
+        self.assertEqual(zero_start_values["Original Cohort Retention (%)"], 0)
+        self.assertEqual(zero_start_values["Period Workforce Attrition (%)"], 100)
 
     def test_workforce_productivity_and_cumulative_monthly_cost(self):
         params = {
@@ -160,7 +246,7 @@ class SimulationCoreTests(unittest.TestCase):
         empty = run_simulation("Employee Relations", params, seed=9)
         empty_values = {row["KPI"]: row["Value"] for row in empty["kpis"]}
         self.assertEqual(empty_values["Total Grievances"], 0)
-        self.assertEqual(empty_values["Open Grievances"], 0)
+        self.assertEqual(empty_values["Cases Unresolved"], 0)
         self.assertEqual(empty_values["Resolution Rate (%)"], 0)
 
         queued = run_simulation(
@@ -177,10 +263,31 @@ class SimulationCoreTests(unittest.TestCase):
         )
         queued_values = {row["KPI"]: row["Value"] for row in queued["kpis"]}
         self.assertEqual(queued["kpis"], repeated["kpis"])
-        self.assertEqual(queued_values["Grievances Resolved"] + queued_values["Open Grievances"], 4)
+        self.assertEqual(queued_values["Cases Resolved"] + queued_values["Cases Unresolved"], 4)
         self.assertEqual(sum(row["Grievances"] for row in queued["series"]), 4)
-        self.assertEqual(queued_values["Average Waiting Time (days)"], 0)
+        self.assertEqual(queued_values["Cases Waiting at Period End"], 0)
+        self.assertIsNotNone(queued_values["Average Waiting Time for Started Cases (days)"])
         self.assertEqual(queued_values["SLA Compliance (%)"], 100)
+
+    def test_employee_relations_censors_waiting_cases_at_observation_end(self):
+        result = run_simulation("Employee Relations", {
+            "employees": 100, "grievance_rate": .1, "capacity": 1,
+            "resolution_days": 100, "period_days": 1, "sla_days": 1,
+            "total_grievances": 8,
+        }, seed=4)
+        values = {row["KPI"]: row["Value"] for row in result["kpis"]}
+        self.assertEqual(values["Cases Resolved"], 0)
+        self.assertEqual(values["Cases Unresolved"], 8)
+        self.assertEqual(
+            values["Cases Waiting at Period End"] + values["Cases in Investigation at Period End"],
+            values["Cases Unresolved"],
+        )
+        self.assertLessEqual(
+            values["Average Waiting Time for Started Cases (days)"],
+            values["Average Censored Wait for Cases Still Waiting (days)"],
+        )
+        self.assertGreater(values["Average Pending-Case Age (days)"], 0)
+        self.assertGreater(values["Average Censored Wait for Cases Still Waiting (days)"], 0)
 
     def test_monte_carlo_reports_simulation_percentiles_and_rejects_deterministic_modules(self):
         params = {
@@ -197,6 +304,33 @@ class SimulationCoreTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_monte_carlo("Workforce Planning", {}, iterations=10, seed=3)
 
+    def test_monte_carlo_runs_for_each_stochastic_module_reproducibly(self):
+        examples = {
+            "Employee Attrition & Retention": {
+                "workforce": 20, "months": 2, "voluntary": .02, "involuntary": .005,
+                "retirement": .002, "hires": 1, "replacement_cost": 100,
+            },
+            "Performance Management": {
+                "employees": 20, "mean_rating": 3, "rating_spread": .5,
+                "training_effect": .2, "reward_budget": 100,
+            },
+            "Compensation & Benefits": {
+                "employees": 20, "salary": 60000, "spread": 5000,
+                "increment": .04, "bonus": .05, "benefits": .1,
+            },
+            "Employee Relations": {
+                "employees": 20, "grievance_rate": .03, "capacity": 2,
+                "resolution_days": 5, "period_days": 10, "sla_days": 5,
+            },
+        }
+        for module, params in examples.items():
+            with self.subTest(module=module):
+                result = run_monte_carlo(module, params, iterations=5, seed=11)
+                self.assertEqual(result, run_monte_carlo(module, params, iterations=5, seed=11))
+                self.assertTrue(result["summaries"])
+                for summary in result["summaries"]:
+                    self.assertLessEqual(summary["5th Percentile"], summary["95th Percentile"])
+
     def test_sensitivity_analysis_uses_common_seed_and_identifies_productivity(self):
         result = run_sensitivity_analysis("Workforce Planning", {
             "workforce": 100, "demand": 110, "months": 12, "growth": .01,
@@ -205,6 +339,43 @@ class SimulationCoreTests(unittest.TestCase):
         self.assertEqual(result["target_kpi"], "Hiring Requirement")
         productivity = next(row for row in result["results"] if row["Input"] == "productivity")
         self.assertNotEqual(productivity["Output change"], 0)
+        self.assertIn(productivity["Direction"], {"increase", "decrease"})
+
+    def test_sensitivity_uses_valid_directions_at_module_bounds(self):
+        result = run_sensitivity_analysis("Performance Management", {
+            "employees": 20, "mean_rating": 5, "rating_spread": .1,
+            "training_effect": 2, "reward_budget": 0,
+        }, seed=8)
+        by_input = {row["Input"]: row for row in result["results"]}
+        self.assertEqual(by_input["mean_rating"]["Direction"], "decrease")
+        self.assertLess(by_input["mean_rating"]["Perturbed"], 5)
+        self.assertEqual(by_input["training_effect"]["Direction"], "decrease")
+        self.assertLessEqual(by_input["training_effect"]["Perturbed"], 2)
+        self.assertEqual(by_input["reward_budget"]["Direction"], "increase")
+
+    def test_sensitivity_covers_every_numeric_default_with_valid_perturbations(self):
+        for module, params in DEFAULT_SIMULATION_PARAMS.items():
+            with self.subTest(module=module):
+                result = run_sensitivity_analysis(module, params, seed=14)
+                expected_inputs = {
+                    key for key, value in params.items()
+                    if isinstance(value, (int, float)) and not isinstance(value, bool)
+                }
+                actual_inputs = {row["Input"] for row in result["results"]}
+                self.assertEqual(actual_inputs, expected_inputs)
+                for row in result["results"]:
+                    self.assertIn(row["Direction"], {"increase", "decrease"})
+                    self.assertNotEqual(row["Baseline"], row["Perturbed"])
+
+    def test_non_finite_numeric_inputs_are_rejected_for_all_modules(self):
+        for module, params in DEFAULT_SIMULATION_PARAMS.items():
+            with self.subTest(module=module):
+                numeric_parameter = next(
+                    key for key, value in params.items()
+                    if isinstance(value, (int, float)) and not isinstance(value, bool)
+                )
+                with self.assertRaisesRegex(ValueError, "must be finite"):
+                    run_simulation(module, {**params, numeric_parameter: float("nan")}, seed=2)
 
     def test_zero_volume_and_invalid_rate_boundaries(self):
         recruitment = run_simulation("Recruitment & Talent Acquisition", {
@@ -225,6 +396,30 @@ class SimulationCoreTests(unittest.TestCase):
         training_values = {row["KPI"]: row["Value"] for row in free_training["kpis"]}
         self.assertEqual(training_values["Enrolled"], 0)
         self.assertIsNone(training_values["Estimated Training ROI (%)"])
+
+        zero_performance = run_simulation("Performance Management", {
+            "employees": 0, "mean_rating": 3, "rating_spread": .5,
+            "training_effect": .2, "reward_budget": 100,
+        }, seed=1)
+        performance_values = {row["KPI"]: row["Value"] for row in zero_performance["kpis"]}
+        self.assertEqual(performance_values["High Performer Share (%)"], 0)
+        self.assertEqual(performance_values["Rewards Allocated"], 0)
+
+        zero_workforce = run_simulation("Workforce Planning", {
+            "workforce": 0, "demand": 0, "months": 1, "growth": 0, "turnover": 0,
+            "productivity": 1, "monthly_cost": 0,
+        }, seed=1)
+        workforce_values = {row["KPI"]: row["Value"] for row in zero_workforce["kpis"]}
+        self.assertEqual(workforce_values["Workforce Utilization (%)"], 0)
+        self.assertEqual(workforce_values["Estimated Labour Cost"], 0)
+
+        zero_compensation = run_simulation("Compensation & Benefits", {
+            "employees": 0, "salary": 60000, "spread": 0,
+            "increment": 0, "bonus": 0, "benefits": 0,
+        }, seed=1)
+        compensation_values = {row["KPI"]: row["Value"] for row in zero_compensation["kpis"]}
+        self.assertEqual(compensation_values["Base Payroll"], 0)
+        self.assertEqual(compensation_values["Compensation Increase (%)"], 0)
 
         with self.assertRaises(ValueError):
             run_simulation("Employee Attrition & Retention", {

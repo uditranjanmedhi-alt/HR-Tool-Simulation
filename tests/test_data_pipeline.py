@@ -9,6 +9,7 @@ from data.synthetic_generator import (
     records_to_xlsx,
 )
 from data.data_validator import validate_dataframe
+from data.record_analysis import analyze_record_level_data
 from data.upload_pipeline import DEFAULT_SIMULATION_PARAMS, map_uploaded_data
 
 
@@ -22,6 +23,11 @@ class SyntheticDataTests(unittest.TestCase):
                 self.assertEqual(first, repeated)
                 self.assertEqual(len(first), 12)
                 self.assertTrue(all(record["synthetic"] for record in first))
+        attrition_report = validate_dataframe(
+            generate_synthetic_data("Employee Attrition & Retention", size=12, seed=7),
+            "attrition_records",
+        )
+        self.assertTrue(attrition_report["valid"], attrition_report["summary"])
 
     def test_synthetic_exports_are_valid_csv_and_xlsx(self):
         records = generate_synthetic_data("Compensation & Benefits", size=3, seed=2)
@@ -116,6 +122,101 @@ class UploadedDataMappingTests(unittest.TestCase):
         self.assertEqual(report["retained_records"], 2)
         self.assertEqual(report["excluded_records"], 0)
         self.assertEqual(provenance["invalid_value_replacements"], {"mean_rating": 2.0})
+
+
+class RecordLevelAnalysisTests(unittest.TestCase):
+    def test_compensation_summarizes_record_level_total_compensation(self):
+        result = analyze_record_level_data(
+            "Compensation & Benefits",
+            ["employee_id", "department", "base_salary", "allowances", "variable_pay", "benefits"],
+            [
+                ["E1", "HR", 100, 10, 20, 30],
+                ["E2", "Finance", 200, 0, 0, 20],
+            ],
+        )
+        total = next(row for row in result["summaries"] if row["Measure"] == "Total compensation")
+        self.assertEqual(total["Records with value"], 2)
+        self.assertEqual(total["Mean"], 190)
+        self.assertEqual(result["distributions"]["Total compensation"], [160, 220])
+        self.assertEqual(result["mode"], "Record-Level Analysis Mode")
+
+    def test_attrition_requires_exit_fields_and_reports_snapshot_not_period_rate(self):
+        with self.assertRaisesRegex(ValueError, "exit_date"):
+            analyze_record_level_data(
+                "Employee Attrition & Retention",
+                ["employee_id", "hire_date", "tenure_months"],
+                [["E1", "2024-01-01", 12]],
+            )
+        result = analyze_record_level_data(
+            "Employee Attrition & Retention",
+            ["employee_id", "hire_date", "exit_date", "exit_category", "department",
+             "tenure_months", "employment_status"],
+            [
+                ["E1", "2024-01-01", None, None, "HR", 24, "Active"],
+                ["E2", "2022-01-01", "2025-01-01", "Voluntary", "HR", 36, "Exited"],
+            ],
+        )
+        status_counts = {
+            row["Category"]: row["Records"]
+            for row in result["category_counts"] if row["Field"] == "employment_status"
+        }
+        self.assertEqual(status_counts, {"Active": 1, "Exited": 1})
+        self.assertTrue(any("no period attrition rate is inferred" in note.lower()
+                            for note in result["notes"]))
+
+    def test_learning_analysis_uses_only_complete_pre_post_pairs(self):
+        result = analyze_record_level_data(
+            "Learning & Development",
+            ["employee_id", "training_programme", "enrolment_date", "completion_status",
+             "assessment_pass", "pre_training_score", "post_training_score"],
+            [
+                ["E1", "Safety", "2026-01-01", "Completed", True, 60, 80],
+                ["E2", "Safety", "2026-01-01", "In progress", None, 50, None],
+                ["E3", "Analytics", "2026-01-01", "Completed", False, 70, 60],
+            ],
+        )
+        comparison = result["paired_score_comparison"]
+        self.assertEqual(comparison["Matched records"], 2)
+        self.assertEqual(comparison["Mean pre/post score change (points)"], 5)
+        gain = next(row for row in result["summaries"] if row["Measure"] == "Paired score change")
+        self.assertEqual(gain["Records with value"], 2)
+        self.assertEqual(gain["Mean"], 5)
+
+    def test_performance_period_and_group_comparisons_are_matched_and_descriptive(self):
+        columns = ["employee_id", "department", "appraisal_period", "performance_rating", "goal_achievement"]
+        rows = [
+            ["E1", "A", "pre", 3, .7], ["E1", "A", "post", 4, .8],
+            ["E2", "A", "pre", 2, .6], ["E2", "A", "post", 4, .8],
+            ["E3", "B", "pre", 3, .7], ["E3", "B", "post", 3.5, .7],
+            ["E4", "B", "pre", 4, .9], ["E4", "B", "post", 3.5, .8],
+        ]
+        result = analyze_record_level_data(
+            "Performance Management", columns, rows,
+            pre_period="pre", post_period="post",
+            comparison_group_column="department", group_a="A", group_b="B",
+        )
+        paired = result["paired_period_comparison"]
+        groups = result["comparison_group_evaluation"]
+        self.assertEqual(paired["Matched employees"], 4)
+        self.assertEqual(paired["Mean paired rating change (points)"], .75)
+        self.assertEqual(groups["Group A matched employees"], 2)
+        self.assertEqual(groups["Group B matched employees"], 2)
+        self.assertEqual(groups["Difference in mean change (A − B, points)"], 1.5)
+        self.assertTrue(any("not a causal estimate" in note for note in result["notes"]))
+
+    def test_record_level_mode_can_exclude_exact_duplicates(self):
+        columns = ["employee_id", "department", "base_salary", "allowances", "variable_pay", "benefits"]
+        rows = [
+            ["E1", "HR", 100, 10, 20, 30],
+            ["E1", "HR", 100, 10, 20, 30],
+            ["E2", "Finance", 200, 0, 0, 20],
+        ]
+        result = analyze_record_level_data(
+            "Compensation & Benefits", columns, rows, exclude_duplicate_rows=True,
+        )
+        self.assertEqual(result["duplicate_records"], 1)
+        self.assertEqual(result["retained_records"], 2)
+        self.assertEqual(result["excluded_duplicate_records"], 1)
 
 
 if __name__ == "__main__":

@@ -18,6 +18,7 @@ from openpyxl.utils.exceptions import InvalidFileException
 
 from config.settings import CHART_COLORS, THEME
 from data.data_loader import excel_sheet_names, parse_uploaded_file
+from data.record_analysis import RECORD_LEVEL_SCHEMAS, analyze_record_level_data
 from data.synthetic_generator import (
     MODULE_DATASETS,
     generate_synthetic_data,
@@ -260,6 +261,8 @@ def show_kpis(kpis: list[dict], per_row: int = 4) -> None:
                 display_value = f"{value:,.2f}"
             elif isinstance(value, (int, np.integer)):
                 display_value = f"{value:,}"
+            elif value is None:
+                display_value = "N/A"
             else:
                 display_value = str(value)
             column.metric(str(row["KPI"]), display_value)
@@ -280,6 +283,8 @@ def render_insights(module: str, params: dict, result: dict) -> None:
     insights: list[tuple[str, str]] = []
     if module == "Recruitment & Talent Acquisition":
         attainment = values["Hiring Target Attainment (%)"]
+        cost_per_hire = values["Cost per Hire"]
+        cost_summary = "not defined because no employees joined" if cost_per_hire is None else f"{cost_per_hire:,.2f} per hire"
         counts = result["series"]
         conversions = [
             (counts[index]["Stage"], counts[index + 1]["Stage"],
@@ -292,18 +297,20 @@ def render_insights(module: str, params: dict, result: dict) -> None:
              f"({attainment:.1f}% of the {values['Vacancies']} vacancy target)."),
             ("Bottleneck", f"{bottleneck[0]} → {bottleneck[1]} conversion is "
              f"{bottleneck[2] * 100:.1f}%, the lowest step in this funnel."),
-            ("Manager action", "Test additional screening capacity or recruiter availability, then compare the funnel and time-to-fill."),
-            ("Trade-off", f"Budget spend is {values['Budget']:,.0f}; improving conversion can lower cost per hire, "
-             "but may require more sourcing or interviewer time."),
+            ("Manager action", "Test screening capacity and per-candidate effort assumptions; processing effort is not elapsed time-to-fill."),
+            ("Spend and unit cost", f"Actual spend is {values['Actual Recruitment Spend']:,.2f}; cost per hire is {cost_summary}. "
+             f"Unused budget is {values['Budget'] - values['Actual Recruitment Spend']:,.2f}."),
         ]
     elif module == "Employee Attrition & Retention":
         rate = values["Annualized Attrition Rate (%)"]
         insights = [
             ("What changed", f"Workforce moves from {values['Initial Workforce']} to {values['Final Workforce']} "
              f"over {params['months']} months."),
-            ("Original cohort", f"{values['Original Cohort Retention (%)']:.1f}% of the initial employees remain; "
-             "replacement hires are tracked separately."),
-            ("Pressure point", f"Annualized attrition is {rate:.1f}%; simulated replacement cost is "
+            ("Workforce rates", f"Monthly exposure-based attrition is {values['Monthly Attrition Rate (%)']:.2f}%; "
+             f"annualized is {rate:.1f}%; period workforce attrition is {values['Period Workforce Attrition (%)']:.1f}%."),
+            ("Original cohort", f"{values['Original Cohort Exits']} of {values['Initial Workforce']} starting employees exited; "
+             f"{values['Original Cohort Retention (%)']:.1f}% remain. Replacement hires are tracked separately."),
+            ("Replacement cost", f"Estimated replacement cost is "
              f"{values['Estimated Replacement Cost']:,.0f}."),
             ("Manager action", "Test a lower voluntary-exit assumption alongside replacement hiring and compare final headcount."),
             ("Workforce movement", f"{values['Total Hires']} hires − {values['Total Exits']} exits = "
@@ -349,12 +356,18 @@ def render_insights(module: str, params: dict, result: dict) -> None:
             ("Safeguard", "This model does not assess individual pay equity or recommend employee-level compensation decisions."),
         ]
     else:
+        average_wait = values["Average Waiting Time for Started Cases (days)"]
+        pending_age = values["Average Pending-Case Age (days)"]
+        wait_summary = "not observed" if average_wait is None else f"{average_wait:.1f} days"
+        age_summary = "not applicable" if pending_age is None else f"{pending_age:.1f} days"
         insights = [
             ("Case volume", f"{values['Total Grievances']} simulated grievances; "
-             f"{values['Pending Grievances']} remain open at the end of the observation period."),
-            ("Resolution", f"{values['Resolution Rate (%)']:.1f}% resolved in-period at an average "
-             f"{values['Average Resolution Time (days)']} days; average wait was "
-             f"{values['Average Waiting Time (days)']:.1f} days."),
+             f"{values['Cases Resolved']} resolved and {values['Cases Unresolved']} unresolved."),
+            ("Queue at period end", f"{values['Cases Waiting at Period End']} waiting; "
+             f"{values['Cases in Investigation at Period End']} in investigation. "
+             f"Average pending-case age is {age_summary}."),
+            ("Observed waiting", f"Average wait among {values['Cases Started Investigation']} cases that started is "
+             f"{wait_summary}; incomplete waiting times are censored separately."),
             ("Service levels", f"{values['SLA Compliance (%)']:.1f}% of resolved cases met the configured SLA; "
              f"investigator utilization was {values['Investigator Utilization (%)']:.1f}%."),
             ("Manager action", "Review case capacity, observed queues and recurring categories; prioritize fair and timely process."),
@@ -416,9 +429,9 @@ def module_parameters(module: str) -> dict:
                 screen_capacity = number("Screening capacity per recruiter", 1, 5000, 200, step=25)
             left, right = st.columns(2)
             with left:
-                screen_days = slider("Screening effort (days per candidate)", 0.1, 5.0, 0.5, 0.1)
+                    screen_days = slider("Screening effort (person-days per candidate)", 0.1, 5.0, 0.5, 0.1)
             with right:
-                interview_days = slider("Interview duration (days)", 0.1, 5.0, 1.0, 0.1)
+                    interview_days = slider("Interview effort (person-days per candidate)", 0.1, 5.0, 1.0, 0.1)
         with conversion:
             left, middle, right = st.columns(3)
             with left:
@@ -576,7 +589,7 @@ def render_module(module: str) -> None:
         "Recruitment & Talent Acquisition": ("Explore funnel conversion, hiring capacity and cost per hire.",
             "Learning objectives: interpret selection ratios and identify bottlenecks in sourcing, screening and offers."),
         "Employee Attrition & Retention": ("Explore how assumed monthly exits and replacement hiring affect workforce size.",
-            "Learning objectives: distinguish monthly from annualized attrition and estimate replacement costs."),
+            "Learning objectives: distinguish monthly, annualized, period-workforce and original-cohort attrition measures."),
         "Learning & Development": ("Estimate training participation, completion, learning gains and illustrative ROI.",
             "Learning objectives: connect participation and learning transfer to workforce outcomes."),
         "Performance Management": ("Explore rating distributions and the implications of development interventions.",
@@ -610,15 +623,17 @@ def render_module(module: str) -> None:
                 {"KPI": "Vacancies", "Value": params["vacancies"]},
                 {"KPI": "Applicants", "Value": params["applicants"]},
                 {"KPI": "Expected hires", "Value": values["Employees Joined"]},
-                {"KPI": "Time to hire (days)", "Value": values["Estimated Time to Fill (days)"]},
+                {"KPI": "Recruitment processing effort (person-days)",
+                 "Value": values["Estimated Recruitment Processing Effort (person-days)"]},
                 {"KPI": "Cost per hire", "Value": values["Cost per Hire"]},
                 {"KPI": "Selection ratio", "Value": f"{values['Recruitment Conversion (%)']:.1f}%"},
             ]
             show_kpis(recruitment_cards, per_row=3)
         else:
             highlights = {
-                "Employee Attrition & Retention": ["Final Workforce", "Annualized Attrition Rate (%)",
-                                                     "Estimated Replacement Cost", "Original Cohort Retention (%)"],
+                "Employee Attrition & Retention": ["Final Workforce", "Monthly Attrition Rate (%)",
+                                                     "Annualized Attrition Rate (%)", "Period Workforce Attrition (%)",
+                                                     "Original Cohort Exits", "Original Cohort Retention (%)"],
                 "Learning & Development": ["Enrolled", "Training Completion Rate (%)",
                                            "Estimated Training ROI (%)", "Estimated Financial Benefit (assumption-based)"],
                 "Performance Management": ["Average Performance Score After Intervention",
@@ -628,8 +643,9 @@ def render_module(module: str) -> None:
                                        "Workforce Gap", "Hiring Requirement"],
                 "Compensation & Benefits": ["Average Salary", "Total Compensation Cost",
                                             "Increment Cost", "Benefits Cost"],
-                "Employee Relations": ["Total Grievances", "Resolved in Period",
-                                       "Pending Grievances", "Resolution Rate (%)"],
+                "Employee Relations": ["Total Grievances", "Cases Resolved", "Cases Unresolved",
+                                       "Cases Waiting at Period End",
+                                       "Average Waiting Time for Started Cases (days)"],
             }[module]
             values = kpi_values(preview)
             show_kpis([{"KPI": key, "Value": values[key]} for key in highlights])
@@ -785,8 +801,8 @@ def render_module(module: str) -> None:
                 st.error(f"Could not run sensitivity analysis: {error}")
         analysis = st.session_state.sensitivity_results.get(module)
         if analysis is not None and analysis.get("params") == params and analysis.get("seed") == seed:
-            st.caption(f"Perturb one input at a time; output: {analysis['target_kpi']}. "
-                       "Stochastic modules use the same seed for each comparison.")
+            st.caption(f"Perturb one input at a time within module bounds; output: {analysis['target_kpi']}. "
+                       "A decrease is used when the upper bound prevents an increase; stochastic modules reuse the seed.")
             if analysis["results"]:
                 sensitivity_fig = go.Figure(go.Bar(
                     x=[row["Output change"] for row in analysis["results"]],
@@ -797,8 +813,8 @@ def render_module(module: str) -> None:
                                               xaxis_title="Output change", yaxis_title="Input")
                 st.plotly_chart(styled_chart(sensitivity_fig), width="stretch")
                 render_table(
-                    ["Input", "Baseline", "Perturbed", "Output change", "Output change (%)"],
-                    [[row["Input"], row["Baseline"], row["Perturbed"], row["Output change"],
+                    ["Input", "Baseline", "Perturbed", "Direction", "Output change", "Output change (%)"],
+                    [[row["Input"], row["Baseline"], row["Perturbed"], row["Direction"], row["Output change"],
                       row["Output change (%)"]] for row in analysis["results"]],
                 )
             else:
@@ -882,9 +898,10 @@ def render_home() -> None:
     recruitment_values = {row["KPI"]: row["Value"] for row in recruitment_demo["kpis"]}
     dashboard_metrics = [
         ("Total employees", f"{employees:,}"),
-        ("Annualized attrition", f"{demo_values['Annualized Attrition Rate (%)']}%"),
+        ("Annualized workforce attrition", f"{demo_values['Annualized Attrition Rate (%)']}%"),
         ("Open positions", f"{max(0, recruitment_values['Vacancies'] - recruitment_values['Employees Joined']):,}"),
-        ("Avg. time to hire", f"{recruitment_values['Estimated Time to Fill (days)']} days"),
+        ("Recruitment processing effort",
+         f"{recruitment_values['Estimated Recruitment Processing Effort (person-days)']} person-days"),
         ("Training completion", f"{learning_values['Training Completion Rate (%)']}%"),
         ("Workforce productivity", f"{workforce_values['Productivity Index']}%"),
     ]
@@ -934,7 +951,7 @@ def render_home() -> None:
         rows = [[item["timestamp"], item["module"], item["seed"],
                  next((row["Value"] for row in item["kpis"] if row["KPI"] in
                        ("Employees Joined", "Final Workforce", "Total Compensation Cost",
-                        "Training Completion Rate (%)", "Pending Grievances")), "—")]
+                        "Training Completion Rate (%)", "Cases Unresolved")), "—")]
                 for item in activity[:6]]
         render_table(["Run time", "Module", "Seed", "Headline outcome"], rows)
     else:
@@ -1021,6 +1038,168 @@ def render_scenarios() -> None:
         st.download_button("Download comparison (CSV)",
                            rows_to_csv(["Scenario", "KPI", "Value"], comparison_rows),
                            "scenario_comparison.csv", "text/csv")
+
+
+def render_record_level_analysis(module: str, headers: list[str], rows: list[list]) -> None:
+    if module not in RECORD_LEVEL_SCHEMAS:
+        st.info("Record-Level Analysis Mode is not available for this module.")
+        return
+    spec = RECORD_LEVEL_SCHEMAS[module]
+    missing_columns = [column for column in spec["required"] if column not in headers]
+    if missing_columns:
+        st.info(
+            "Record-level analysis is unavailable for this dataset because it lacks: "
+            + ", ".join(missing_columns)
+            + ". Use Aggregate Parameter Mode or select a dataset with the required fields."
+        )
+        return
+
+    st.markdown("#### Record-Level Analysis Mode")
+    st.caption(
+        "Individual records are summarized directly, not reduced to scalar simulation inputs. "
+        "Missing or non-finite numeric values are excluded per measure and counted; exact duplicate rows "
+        "can optionally be excluded."
+    )
+    duplicate_choice = st.selectbox(
+        "Record-level duplicate handling", ["keep duplicates", "exclude duplicate rows"],
+        key="record_level_duplicate_handling",
+    )
+    pre_period = post_period = group_column = group_a = group_b = None
+    if module == "Performance Management":
+        period_index = headers.index("appraisal_period")
+        periods = sorted({
+            str(row[period_index]) for row in rows
+            if period_index < len(row) and row[period_index] is not None
+            and str(row[period_index]).strip()
+        })
+        compare_periods = st.checkbox(
+            "Compare matched employee ratings across appraisal periods",
+            key="record_level_compare_periods",
+        )
+        if compare_periods:
+            if len(periods) < 2:
+                st.info("At least two appraisal periods are required for a paired comparison.")
+            else:
+                period_cols = st.columns(2)
+                with period_cols[0]:
+                    pre_period = st.selectbox(
+                        "Baseline appraisal period", periods, key="record_level_pre_period",
+                    )
+                post_options = [period for period in periods if period != pre_period]
+                with period_cols[1]:
+                    post_period = st.selectbox(
+                        "Follow-up appraisal period", post_options, key="record_level_post_period",
+                    )
+                group_candidates = []
+                reserved = {"employee_id", "appraisal_period", "performance_rating", "goal_achievement"}
+                for column_index, column in enumerate(headers):
+                    if column in reserved:
+                        continue
+                    values = {
+                        str(row[column_index]) for row in rows
+                        if column_index < len(row) and row[column_index] is not None
+                        and str(row[column_index]).strip()
+                    }
+                    if 1 < len(values) <= 20:
+                        group_candidates.append(column)
+                compare_groups = st.checkbox(
+                    "Also compare matched changes across groups (descriptive)",
+                    key="record_level_compare_groups",
+                )
+                if compare_groups:
+                    if not group_candidates:
+                        st.info("No grouping column with 2–20 observed groups is available.")
+                    else:
+                        group_column = st.selectbox(
+                            "Comparison group column", group_candidates,
+                            key="record_level_group_column",
+                        )
+                        group_index = headers.index(group_column)
+                        group_values = sorted({
+                            str(row[group_index]) for row in rows
+                            if group_index < len(row) and row[group_index] is not None
+                            and str(row[group_index]).strip()
+                        })
+                        if len(group_values) >= 2:
+                            group_cols = st.columns(2)
+                            with group_cols[0]:
+                                group_a = st.selectbox(
+                                    "Group A", group_values, key="record_level_group_a",
+                                )
+                            group_b_values = [value for value in group_values if value != group_a]
+                            with group_cols[1]:
+                                group_b = st.selectbox(
+                                    "Group B", group_b_values, key="record_level_group_b",
+                                )
+                        else:
+                            group_column = None
+
+    try:
+        analysis = analyze_record_level_data(
+            module, headers, rows,
+            exclude_duplicate_rows=duplicate_choice == "exclude duplicate rows",
+            pre_period=pre_period,
+            post_period=post_period,
+            comparison_group_column=group_column,
+            group_a=group_a,
+            group_b=group_b,
+        )
+    except ValueError as error:
+        st.warning(str(error))
+        return
+
+    st.write(
+        f"Analyzed **{analysis['retained_records']:,} / {analysis['input_records']:,}** records; "
+        f"excluded **{analysis['excluded_duplicate_records']:,}** duplicates. "
+        f"Mode: **{analysis['mode']}**."
+    )
+    render_table(
+        ["Measure", "Records with value", "Mean", "Median", "Standard deviation", "Minimum", "Maximum"],
+        [[row.get(key) for key in (
+            "Measure", "Records with value", "Mean", "Median", "Standard deviation", "Minimum", "Maximum",
+        )] for row in analysis["summaries"]],
+    )
+    if analysis["invalid_or_missing_numeric_values"]:
+        render_table(
+            ["Measure", "Missing or invalid values excluded"],
+            [[measure, count] for measure, count in analysis["invalid_or_missing_numeric_values"].items()],
+        )
+    if analysis["distributions"]:
+        measure = st.selectbox(
+            "Distribution to visualize", list(analysis["distributions"]),
+            key="record_level_distribution",
+        )
+        distribution = go.Figure(go.Histogram(x=analysis["distributions"][measure], nbinsx=20))
+        distribution.update_layout(
+            title=f"Record-level distribution: {measure}",
+            xaxis_title=measure,
+            yaxis_title="Records",
+        )
+        st.plotly_chart(styled_chart(distribution), width="stretch")
+    if analysis["category_counts"]:
+        st.markdown("**Observed category counts**")
+        render_table(
+            ["Field", "Category", "Records"],
+            [[row["Field"], row["Category"], row["Records"]]
+             for row in analysis["category_counts"]],
+        )
+    if analysis["paired_score_comparison"]:
+        st.markdown("**Paired training-score comparison**")
+        st.write(analysis["paired_score_comparison"])
+    if analysis["paired_period_comparison"]:
+        st.markdown("**Matched appraisal-period comparison**")
+        st.write(analysis["paired_period_comparison"])
+    elif pre_period and post_period:
+        st.info("No employee has a valid rating in both selected appraisal periods.")
+    if analysis["comparison_group_evaluation"]:
+        st.markdown("**Descriptive comparison of matched group changes**")
+        st.write(analysis["comparison_group_evaluation"])
+    elif group_column:
+        st.info("No matched employees with stable membership in both selected groups were available.")
+    for note in analysis["notes"]:
+        st.caption(note)
+    if module == "Performance Management" and (pre_period or group_column):
+        st.warning("These are descriptive comparisons only; they do not estimate a causal intervention effect.")
 
 
 def render_data_management() -> None:
@@ -1139,8 +1318,20 @@ def render_data_management() -> None:
     st.download_button("Download selected dataset as CSV", rows_to_csv(headers, rows),
                        "data_export.csv", "text/csv")
 
-    st.subheader("Explicit module mapping")
+    st.subheader("Upload analysis mode")
     module = st.selectbox("Simulation module", list(MODULES), key="uploaded_module")
+    analysis_mode = st.radio(
+        "Choose how to use the selected dataset",
+        ["Aggregate Parameter Mode", "Record-Level Analysis Mode"],
+        horizontal=True,
+        key="upload_analysis_mode",
+    )
+    if analysis_mode == "Record-Level Analysis Mode":
+        render_record_level_analysis(module, headers, rows)
+        return
+
+    st.subheader("Aggregate Parameter Mode")
+    st.caption("Explicitly map columns to scalar model inputs; unassigned inputs keep their displayed defaults.")
     defaults = DEFAULT_SIMULATION_PARAMS[module]
     mappings: dict[str, str] = {}
     aggregations: dict[str, str] = {}
@@ -1285,14 +1476,21 @@ def render_recommendations() -> None:
         advice = []
         if module == "Employee Attrition & Retention" and values.get("Annualized Attrition Rate (%)", 0) > 15:
             advice.append("Review workload, engagement, career growth and compensation; annualized attrition exceeds the illustrative 15% threshold.")
-        if module == "Recruitment & Talent Acquisition" and values.get("Estimated Time to Fill (days)", 0) > 30:
-            advice.append("Review recruiter capacity and interview scheduling; estimated time to fill is above 30 days.")
+        if module == "Recruitment & Talent Acquisition":
+            funded = values["Candidates Within Recruitment Budget"]
+            if funded < values["Applicants"]:
+                advice.append(
+                    f"The budget funds {funded} of {values['Applicants']} applicants; review the budget "
+                    "and cost-per-applicant assumption before interpreting funnel outcomes."
+                )
+            if values["Cost per Hire"] is None:
+                advice.append("Cost per hire is undefined because no employees joined; actual spend is still reported.")
         if module == "Learning & Development" and values.get("Training Completion Rate (%)", 0) < 70:
             advice.append("Investigate scheduling, relevance and manager support; simulated completion is below 70%.")
         if module == "Workforce Planning" and values.get("Workforce Gap", 0) > 0:
             advice.append(f"Forecast available FTE is below required FTE by {values['Workforce Gap']:.1f}; assess hiring, internal mobility and productivity.")
-        if module == "Employee Relations" and values.get("Pending Grievances", 0) > 0:
-            advice.append("Review case capacity and resolution processes; pending grievances remain in the simulation.")
+        if module == "Employee Relations" and values.get("Cases Unresolved", 0) > 0:
+            advice.append("Review case capacity and resolution processes; distinguish cases still waiting from those already under investigation.")
         if module == "Compensation & Benefits":
             advice.append("Compare simulated total compensation against a validated market benchmark before making budget decisions.")
         if module == "Performance Management":
@@ -1409,19 +1607,19 @@ def render_documentation() -> None:
     st.subheader("Simulation methodology")
     st.markdown(
         """
-        - **Recruitment:** deterministic stage counts are floored sequentially; recruitment budget limits candidate reach using the configurable cost-per-applicant assumption. Time to fill is estimated from screening/interview effort and available capacity.
-        - **Attrition:** each employee has mutually exclusive monthly voluntary, involuntary and retirement exit outcomes. Monthly attrition uses exits per employee-month exposure; annualized attrition compounds the average monthly rate. Original cohort retention excludes replacement hires.
+        - **Recruitment:** deterministic stage counts are floored sequentially. Funded applicants = min(applicants, floor(budget / cost per applicant)); actual spend = funded applicants × cost per applicant; cost per hire = actual spend / joined employees and is undefined when hires are zero. Recruitment processing effort sums screening and interview person-days and is not elapsed time-to-fill.
+        - **Attrition:** each employee has mutually exclusive monthly voluntary, involuntary and retirement exit outcomes. Monthly workforce attrition = total exits / total opening-workforce employee-months. Annualized workforce attrition = 1 − (1 − pooled monthly rate)^12. Period workforce attrition compounds each month's exits / opening workforce. Original cohort exits and retention use only the starting employees; retention denominator is initial workforce.
         - **Learning & Development:** eligibility, participation, enrollment, completion and assessment are separate stages. Estimated financial benefit is passed assessments × observed score gain × configured value per point. ROI = (estimated benefit − training cost) / training cost; it is undefined for zero cost.
-        - **Performance:** ratings are sampled from a normal distribution clipped to 1–5. The intervention adds assumed rating points. The reward budget is shared equally by simulated ratings of 4 or higher.
+        - **Performance:** baseline ratings are normal draws clipped to 1–5, which changes the realized mean and adds boundary mass. A fixed assumed point effect is added to each draw and clipped again. The full reward budget is split equally across ratings of 4 or higher; no rewards are allocated if there are no qualifying ratings. These are assumptions, not causal estimates. Record-level mode can optionally compare matched employee ratings across periods and report group differences in mean change descriptively.
         - **Workforce planning:** workload and supply are forecast monthly. Required FTE = workload / productivity index; effective capacity = available FTE × productivity index. Gap = required FTE − available FTE. Labour cost sums each month’s workforce supply × monthly cost.
         - **Compensation:** salaries are sampled from a normal distribution, clipped to 20,000–300,000 in the same currency units as the salary input. Increment, bonus and benefits are percentages of base salary.
-        - **Employee relations:** grievance arrivals use a Poisson model over the observation period. Cases join a FIFO SimPy queue with parallel investigators and exponentially distributed service times. Open cases remain pending at the period boundary; SLA compliance is calculated among resolved cases.
+        - **Employee relations:** grievance arrivals use a Poisson model over the observation period. Cases join a FIFO SimPy queue with parallel investigators and exponentially distributed service times. Average waiting uses only cases that started investigation. Unresolved cases, cases still waiting, cases in service, pending-case age, and censored waiting time are reported separately; SLA compliance uses resolved cases only.
 
-        **Data:** Synthetic records are reproducible for a fixed seed and labelled synthetic. Uploaded CSV/XLSX data must be explicitly mapped to simulation inputs; unmapped inputs retain displayed defaults. Missing, invalid and duplicate records are handled only according to the selected cleaning options, with exclusions and mappings recorded in result provenance.
+        **Data:** Synthetic records are reproducible for a fixed seed and labelled synthetic. Aggregate Parameter Mode maps uploaded columns to scalar model inputs. Record-Level Analysis Mode preserves supported employee, training, performance, compensation, and attrition records for descriptive distributions; modules without required fields remain unavailable in that mode. Performance period and group comparisons are descriptive, not causal.
 
         **Uncertainty:** Monte Carlo analysis is available only for stochastic modules. Its 5th–95th percentiles describe simulated variation, not statistical confidence intervals. One-at-a-time sensitivity analysis perturbs numeric inputs and reuses the same seed for comparison.
 
-        **Glossary:** Monthly attrition — exits per employee-month exposure; annualized attrition — compounded monthly rate; cohort retention — starting employees still employed divided by starting workforce; workload unit — work equivalent to one FTE at productivity index 1.0; workforce gap — required FTE minus available FTE.
+        **Glossary:** Monthly workforce attrition — exits divided by opening-workforce employee-month exposure; annualized workforce attrition — compounded pooled monthly rate; period workforce attrition — complement of compounded monthly workforce survival; original cohort retention — starting employees still employed divided by starting workforce; recruitment processing effort — summed screening/interview person-days; workload unit — work equivalent to one FTE at productivity index 1.0; workforce gap — required FTE minus available FTE.
 
         These models use stated assumptions and are not empirically validated predictions. Estimated training benefit is assumption-based and does not establish causality. Validate assumptions and applicable policies before real-world use. This application does not make hiring, firing, promotion, compensation, or disciplinary decisions.
         """

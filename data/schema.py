@@ -5,6 +5,10 @@ SCHEMA = {
         "employee_id", "department", "job_level", "salary", "hire_date",
         "experience_years", "performance_score",
     ],
+    "attrition_records": [
+        "employee_id", "hire_date", "exit_date", "exit_category", "department",
+        "tenure_months", "employment_status",
+    ],
     "candidates": [
         "candidate_id", "source", "applied_position", "education_level",
         "years_experience", "application_date",
@@ -37,6 +41,7 @@ SCHEMA = {
 
 NUMERIC_COLUMNS = {
     "employees": {"salary", "experience_years", "performance_score"},
+    "attrition_records": {"tenure_months"},
     "candidates": {"years_experience"},
     "training_records": {"pre_training_score", "post_training_score"},
     "performance_records": {"performance_rating", "goal_achievement"},
@@ -44,4 +49,9 @@ NUMERIC_COLUMNS = {
         "workforce_supply", "workforce_demand", "productivity_index", "fte_requirement",
     },
     "compensation_records": {"base_salary", "allowances", "variable_pay", "benefits"},
+}
+
+NULLABLE_COLUMNS = {
+    "attrition_records": {"exit_date", "exit_category"},
+    "training_records": {"enrolment_date", "assessment_pass", "post_training_score"},
 }

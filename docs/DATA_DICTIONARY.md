@@ -16,15 +16,32 @@ seed produces the same records across runs.
 
 ## Upload mapping
 
-The upload workflow maps a chosen source column to a named model input. Each
-mapping also requires a selected aggregation: mean, median, sum, minimum,
-maximum, non-empty count, or unique count. No column mapping is inferred.
+The upload workflow provides two distinct modes:
+
+- **Aggregate Parameter Mode** maps a chosen source column to a named scalar
+  model input and requires a selected aggregation: mean, median, sum, minimum,
+  maximum, non-empty count, or unique count. No column mapping is inferred.
+- **Record-Level Analysis Mode** summarizes individual compensation,
+  attrition, performance, or training records when the required fields below
+  are present. It does not run the scalar simulation. Recruitment, workforce
+  planning, and employee-relations record summaries are not implemented.
+
+The `attrition_records` schema matches the generated attrition dataset:
+`employee_id`, `hire_date`, `exit_date`, `exit_category`, `department`,
+`tenure_months`, and `employment_status`. Exit date and category are nullable
+for active employees.
 
 The non-empty count aggregation works with identifiers and text fields. Numeric
 aggregations require finite numeric cells. Unmapped model inputs keep the
 displayed module defaults. For Employee Relations, the optional `total_grievances`
 mapping lets a dataset's grievance count be used directly instead of generating
 a Poisson count.
+
+Record-level numeric summaries exclude missing or non-finite values per measure
+and report how many values were excluded. Training score changes use only
+records with both scores. Performance period comparisons require matched
+employee identifiers; optional group differences are descriptive and not
+causal.
 
 ## Cleaning and provenance
 

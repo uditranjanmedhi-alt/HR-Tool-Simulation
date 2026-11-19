@@ -5,17 +5,18 @@
 - Replaced the incomplete app entry point with a complete, branded navigation shell and master dashboard.
 - Applied a responsive deep-navy/slate visual system with blue and teal accents to the dashboard, seven simulation modules, shared controls, tables, and Plotly charts.
 - Replaced the restrictive four-color palette with a coordinated enterprise palette; chart series use distinct blue, teal, violet, amber, coral, and green colors, with high-contrast labels and print-friendly PDF exports.
-- Added dashboard indicators for workforce size, attrition, open positions, hiring time, training completion, and productivity, with illustrative workforce, attrition, recruitment, and department distribution visualizations. Removed the unsupported department-performance chart.
+- Added dashboard indicators for workforce size, attrition, open positions, recruitment processing effort, training completion, and productivity, with illustrative workforce, attrition, recruitment, and department distribution visualizations. Removed the unsupported department-performance chart.
 - Added session-only dashboard controls to edit department names and headcounts, add/remove departments, and update the workforce distribution chart and total employee KPI.
 - Reorganized module controls into task-specific tabs and added consistent KPI cards, live previews, run/reset/save controls, result views, and manager insights.
-- Added recruitment conversion, recruiter workload, hiring outcome, cost, and efficiency views; capped joined candidates at the vacancy target to prevent overfilling.
+- Added recruitment conversion, recruiter workload, hiring outcome, actual-spend cost-per-hire, and person-day processing-effort views; capped joined candidates at the vacancy target to prevent overfilling.
 - Implemented reproducible calculation flows and chart data for all seven HR modules.
-- Corrected attrition cohort tracking, workforce planning productivity/FTE and monthly labour cost, assumption-based L&D ROI, recruitment budget reach, performance reward allocation, and employee-relations queue behavior.
+- Corrected attrition cohort tracking and separated monthly exposure-based, annualized, period-workforce, and original-cohort metrics. Corrected workforce planning productivity/FTE and monthly labour cost, assumption-based L&D ROI, recruitment expenditure, performance reward allocation, and employee-relations queue waiting/censoring.
 - Added configurable instant and staged-progress simulation modes.
 - Added module-appropriate Monte Carlo summaries for stochastic models and one-at-a-time sensitivity analysis for all seven modules.
 - Added session-only scenario saving/comparison, case studies, educational scoring, and threshold-based recommendations.
 - Added reproducible synthetic records for all seven modules with CSV/XLSX downloads.
-- Added CSV/Excel worksheet selection, explicit column-to-input mappings, type and row validation, cleaning choices, confirmation, simulation execution, and provenance.
+- Added CSV/Excel worksheet selection and two upload paths: explicit Aggregate Parameter Mode mapping/cleaning/confirmation/provenance, plus schema-gated Record-Level Analysis Mode for compensation, attrition, performance, and learning/training data.
+- Added record-level distributions, paired training-score summaries, and optional matched performance period/group comparisons with non-causal interpretation.
 - Added KPI, simulation-series, Excel, and optional PDF report exports.
 - Added methodology, limitations, data dictionary, audit, validation, and changelog documentation.
 - Added a subtle fixed “Made by Udit Ranjan Medhi” watermark across app pages.
@@ -26,7 +27,7 @@
 ## Known limitations
 
 - Animation is a short presentation of already-computed results; it does not expose interactive pause/resume controls.
-- Uploaded data is aggregated to scalar module inputs only through explicit user-selected mappings; unassigned inputs keep their displayed defaults.
+- Aggregate Parameter Mode maps uploaded columns to scalar module inputs; unassigned inputs keep their displayed defaults. Record-Level Analysis Mode is descriptive and unavailable when the required fields are missing.
 - Synthetic dashboard examples are illustrative, not organization-specific.
 - Scenarios persist only for the current Streamlit session.
 - Evaluation of legal pay equity, individual employee risk, and automated employment decisions is intentionally out of scope.
@@ -39,6 +40,7 @@
 - `engines/simulation_core.py`
 - `data/synthetic_generator.py`
 - `data/upload_pipeline.py`
+- `data/record_analysis.py`
 - `data/schema.py`
 - `data/data_validator.py`
 - `tests/test_simulation_core.py`
@@ -51,8 +53,8 @@
 
 ## Verification
 
-- Python compilation passed for the app, simulation engine, data loader, validator, upload pipeline, and synthetic generator.
-- The full test suite passed: 23 tests, including all seven simulation modules, upload mapping and cleaning, exports, dashboard interactions, and sensitivity/Monte Carlo controls.
+- `.\.venv\Scripts\python.exe -m compileall -q .` completed successfully.
+- The full test suite passed: 36 tests, including all seven simulation modules, formula and boundary checks, both upload modes, record-level comparisons, dashboard interactions, Monte Carlo, and sensitivity analysis.
 - `pip check` reported no broken requirements.
 - The active `app.py` simulation path avoids importing Pandas or rendering Arrow-backed tables. Pandas remains a dependency for older standalone wrappers.
 - Local environment packages were checked with `pip check`; optional dependencies not used by the active code were removed from the deployment manifest.

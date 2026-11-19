@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from math import isfinite
+
 import numpy as np
 import simpy
 
@@ -30,7 +32,48 @@ SENSITIVITY_OUTPUTS = {
     "Performance Management": "Average Performance Score After Intervention",
     "Workforce Planning": "Hiring Requirement",
     "Compensation & Benefits": "Total Compensation Cost",
-    "Employee Relations": "Open Grievances",
+    "Employee Relations": "Cases Unresolved",
+}
+
+SENSITIVITY_BOUNDS = {
+    "Recruitment & Talent Acquisition": {
+        "vacancies": (0, 1000), "applicants": (0, 10000), "recruiters": (1, 30),
+        "interviewers": (1, 30), "screen_capacity": (0, 5000), "budget": (0, 10000000),
+        "screen_rate": (0, 1), "shortlist_rate": (0, 1), "dropout_rate": (0, 1),
+        "offer_rate": (0, 1), "acceptance_rate": (0, 1), "joining_rate": (0, 1),
+        "screen_days": (.1, 5), "interview_days": (.1, 5),
+        "cost_per_applicant": (1, 10000),
+    },
+    "Employee Attrition & Retention": {
+        "workforce": (0, 100000), "months": (1, 36), "voluntary": (0, .2),
+        "involuntary": (0, .1), "retirement": (0, .1), "hires": (0, 500),
+        "replacement_cost": (0, 1000000),
+    },
+    "Learning & Development": {
+        "employees": (0, 100000), "eligibility_rate": (0, 1), "budget": (0, 100000000),
+        "cost_per_person": (0, 100000), "participation": (0, 1), "completion": (0, 1),
+        "pass_rate": (0, 1), "learning_gain": (0, 5), "pre_training_score": (0, 100),
+        "value_per_gain": (0, 100000),
+    },
+    "Performance Management": {
+        "employees": (0, 100000), "mean_rating": (1, 5), "rating_spread": (.1, 2),
+        "training_effect": (0, 2), "reward_budget": (0, 100000000),
+    },
+    "Workforce Planning": {
+        "workforce": (0, 100000), "demand": (0, 100000), "months": (1, 60),
+        "growth": (-.1, .2), "turnover": (0, .2), "productivity": (.1, 2),
+        "monthly_cost": (0, 1000000),
+    },
+    "Compensation & Benefits": {
+        "employees": (0, 100000), "salary": (10000, 1000000),
+        "spread": (1000, 200000), "increment": (0, .3), "bonus": (0, .5),
+        "benefits": (0, .5),
+    },
+    "Employee Relations": {
+        "employees": (0, 100000), "grievance_rate": (0, .2), "capacity": (1, 100),
+        "resolution_days": (1, 90), "period_days": (1, 365), "sla_days": (1, 90),
+        "total_grievances": (0, 100000),
+    },
 }
 
 
@@ -44,9 +87,14 @@ def _result(kpis: dict, series: list[dict], notes: list[str] | None = None) -> d
 
 def run_simulation(module: str, params: dict, seed: int = 42) -> dict:
     """Run a single-module simulation and return its measured outputs."""
-    rng = np.random.default_rng(int(seed))
     if module not in MODULES:
         raise ValueError(f"Unknown HR simulation module: {module}")
+    if not isinstance(params, dict):
+        raise ValueError("Simulation parameters must be supplied as a dictionary.")
+    for key, value in params.items():
+        if isinstance(value, (int, float, np.number)) and not isfinite(float(value)):
+            raise ValueError(f"Simulation parameter {key} must be finite.")
+    rng = np.random.default_rng(int(seed))
 
     if module == "Recruitment & Talent Acquisition":
         vacancies = int(params["vacancies"])
@@ -78,21 +126,24 @@ def run_simulation(module: str, params: dict, seed: int = 42) -> dict:
         interview_days = float(params["interview_days"])
         if min(screen_days, interview_days) < 0:
             raise ValueError("Screening and interview effort must be non-negative.")
-        days = (screened * screen_days / recruiters
-                + interviewed * interview_days / interviewers)
+        actual_spend = funded_applicants * cost_per_applicant
+        processing_effort = screened * screen_days + interviewed * interview_days
         stages = ["Applicants", "Screened", "Shortlisted", "Interviewed", "Offers", "Joined"]
         counts = [applicants, screened, shortlisted, interviewed, offers, joined]
         return _result({
             "Vacancies": vacancies, "Applicants": applicants, "Employees Joined": joined,
             "Hiring Target Attainment (%)": round(100 * min(joined / vacancies, 1), 1) if vacancies else 0,
-            "Estimated Time to Fill (days)": round(days, 1),
-            "Cost per Hire": round(budget / joined, 2) if joined else 0,
+            "Estimated Recruitment Processing Effort (person-days)": round(processing_effort, 2),
+            "Actual Recruitment Spend": round(actual_spend, 2),
+            "Cost per Hire": round(actual_spend / joined, 2) if joined else None,
             "Offer Acceptance Rate (%)": round(100 * accepted / offers, 1) if offers else 0,
             "Recruitment Conversion (%)": round(100 * joined / applicants, 1) if applicants else 0,
             "Budget": round(budget, 2),
             "Candidates Within Recruitment Budget": funded_applicants,
         }, [{"Stage": stage, "Count": count} for stage, count in zip(stages, counts)],
-           ["Recruitment budget is translated to candidate reach using the stated $100-per-applicant planning assumption; set cost_per_applicant to override it.",
+           [f"Actual recruitment spend is funded applicants ({funded_applicants}) × cost per applicant ({cost_per_applicant:g}); unused budget is not counted as spent.",
+            "Cost per hire is actual recruitment spend divided by joined employees; it is undefined when no employees join.",
+            "Recruitment processing effort sums screening and interview person-days; it is not elapsed time-to-fill.",
             "The funnel is deterministic: each stage is floored from the prior stage count and configured conversion assumption."])
 
     if module == "Employee Attrition & Retention":
@@ -110,7 +161,7 @@ def run_simulation(module: str, params: dict, seed: int = 42) -> dict:
         original_cohort = initial
         replacement_cohort = 0
         rows = []
-        exits_total = voluntary_total = involuntary_total = retirement_total = 0
+        exits_total = original_exits_total = voluntary_total = involuntary_total = retirement_total = 0
         exposure = 0
         period_survival = 1.0
         for month in range(1, months + 1):
@@ -127,6 +178,7 @@ def run_simulation(module: str, params: dict, seed: int = 42) -> dict:
                 period_survival *= 1 - exits / opening
             original_exits = int(original_moves[:3].sum())
             original_cohort -= original_exits
+            original_exits_total += original_exits
             replacement_cohort -= int(replacement_moves[:3].sum())
             hires = replacement_hires
             replacement_cohort += hires
@@ -138,26 +190,28 @@ def run_simulation(module: str, params: dict, seed: int = 42) -> dict:
                 "Month": month, "Opening Workforce": opening, "Voluntary Exits": voluntary_exits,
                 "Involuntary Exits": involuntary_exits, "Retirement Exits": retirement_exits,
                 "Exits": exits, "Hires": hires, "Workforce": original_cohort + replacement_cohort,
+                "Original Cohort Exits": original_exits,
                 "Original Cohort Remaining": original_cohort,
             })
         final = original_cohort + replacement_cohort
         monthly_rate = exits_total / exposure if exposure else 0
-        period_attrition = 1 - period_survival if initial else 0
+        period_attrition = 1 - period_survival if exposure else 0
         return _result({
             "Initial Workforce": initial, "Final Workforce": final, "Total Exits": exits_total,
+            "Original Cohort Exits": original_exits_total,
             "Voluntary Exits": voluntary_total, "Involuntary Exits": involuntary_total,
             "Retirement Exits": retirement_total, "Total Hires": replacement_hires * months,
             "Monthly Attrition Rate (%)": round(100 * monthly_rate, 2),
             "Annualized Attrition Rate (%)": round(100 * (1 - (1 - monthly_rate) ** 12), 2),
-            "Period Attrition (%)": round(100 * period_attrition, 2),
+            "Period Workforce Attrition (%)": round(100 * period_attrition, 2),
             "Original Cohort Retention (%)": round(100 * original_cohort / initial, 2) if initial else 0,
-            "Retention Rate (%)": round(100 * original_cohort / initial, 2) if initial else 0,
             "Net Workforce Change": final - initial,
             "Estimated Replacement Cost": round(exits_total * replacement_cost, 2),
         }, rows, [
             "Monthly voluntary, involuntary and retirement exits are mutually exclusive outcomes for each employee; their configured probabilities must sum to at most 1.",
-            "Original employees and replacement hires are tracked as separate cohorts. Retention uses original-cohort employees still employed divided by starting workforce.",
-            "Monthly attrition uses exits divided by observed workforce employee-month exposure; annualized attrition compounds the average monthly rate.",
+            "Original cohort exits count only starting employees who left; original cohort retention is starting employees still employed divided by the initial workforce.",
+            "Monthly workforce attrition is total exits divided by total opening-workforce employee-month exposure. Annualized workforce attrition is 1 − (1 − pooled monthly rate)^12.",
+            "Period workforce attrition is 1 − the product of each month's (1 − exits / that month's opening workforce); it describes the simulated period workforce, including replacement hires, and is not original-cohort attrition.",
         ])
 
     if module == "Learning & Development":
@@ -239,8 +293,10 @@ def run_simulation(module: str, params: dict, seed: int = 42) -> dict:
             if high_performers else 0,
         }, [{"Rating": rating, "Employees": int(count)} for rating, count in zip(range(1, 6), counts)],
            [
-               "Ratings are sampled from a normal distribution clipped to the 1–5 scale; intervention points are an assumption, not causal evidence.",
-               "The reward budget is split equally across simulated employees rated 4 or higher; if there are none, no rewards are allocated.",
+               f"Baseline ratings are independent normal draws with mean {mean:g} and standard deviation {spread:g}, clipped to the 1–5 rating scale; clipping creates boundary mass and changes the realized mean.",
+               f"The intervention adds the same fixed {effect:g} points to every baseline rating, then clips the result to 1–5; it is a scenario assumption, not an estimated effect.",
+               "The reward budget is allocated in full and split equally across simulated employees rated 4 or higher; if there are none, no rewards are allocated.",
+               "Pre/post differences are generated by construction and do not establish that an intervention caused a performance change.",
            ])
 
     if module == "Workforce Planning":
@@ -361,12 +417,13 @@ def run_simulation(module: str, params: dict, seed: int = 42) -> dict:
         env.process(investigate(case))
     env.run(until=period_days)
     resolved_cases = [case for case in cases if case["resolved"] is not None]
-    open_cases = [case for case in cases if case["resolved"] is None]
-    waits = [
-        (case["start"] if case["start"] is not None else period_days) - case["arrival"]
-        for case in cases
-    ]
-    avg_wait = float(np.mean(waits)) if waits else 0.0
+    started_cases = [case for case in cases if case["start"] is not None]
+    waiting_cases = [case for case in cases if case["start"] is None]
+    unresolved_cases = [case for case in cases if case["resolved"] is None]
+    waits = [case["start"] - case["arrival"] for case in started_cases]
+    avg_wait = float(np.mean(waits)) if waits else None
+    pending_ages = [period_days - case["arrival"] for case in unresolved_cases]
+    censored_waits = [period_days - case["arrival"] for case in waiting_cases]
     avg_resolution = float(np.mean([case["resolved"] - case["arrival"] for case in resolved_cases])) if resolved_cases else None
     on_time = sum(case["resolved"] - case["arrival"] <= sla_days for case in resolved_cases)
     busy_time = sum(
@@ -379,17 +436,22 @@ def run_simulation(module: str, params: dict, seed: int = 42) -> dict:
                        for category in categories}
     return _result({
         "Employees": employees, "Total Grievances": grievances,
-        "Grievances Resolved": len(resolved_cases), "Resolved in Period": len(resolved_cases),
-        "Open Grievances": len(open_cases), "Pending Grievances": len(open_cases),
-        "Average Waiting Time (days)": round(avg_wait, 2),
-        "Average Resolution Time (days)": round(avg_resolution, 2) if avg_resolution is not None else None,
+        "Cases Resolved": len(resolved_cases), "Cases Unresolved": len(unresolved_cases),
+        "Cases Waiting at Period End": len(waiting_cases),
+        "Cases in Investigation at Period End": len(unresolved_cases) - len(waiting_cases),
+        "Cases Started Investigation": len(started_cases),
+        "Average Waiting Time for Started Cases (days)": round(avg_wait, 2) if avg_wait is not None else None,
+        "Average Pending-Case Age (days)": round(float(np.mean(pending_ages)), 2) if pending_ages else None,
+        "Average Censored Wait for Cases Still Waiting (days)": round(float(np.mean(censored_waits)), 2) if censored_waits else None,
+        "Average Resolution Time (arrival to resolution, days)": round(avg_resolution, 2) if avg_resolution is not None else None,
         "Resolution Rate (%)": round(100 * len(resolved_cases) / grievances, 1) if grievances else 0,
         "SLA Compliance (%)": round(100 * on_time / len(resolved_cases), 1) if resolved_cases else 0,
         "Investigator Utilization (%)": round(100 * busy_time / (capacity * period_days), 1),
     }, [{"Category": category, "Grievances": int(category_counts[category])} for category in categories],
        [
            f"Cases arrive according to a Poisson process over {period_days:g} days; each investigator serves one case at a time with exponentially distributed service time (mean {resolution_days:g} days).",
-           f"FIFO queue; pending cases at day {period_days:g} remain open. SLA compliance is the share of resolved cases completed within {sla_days:g} days of arrival.",
+           f"FIFO queue; cases not resolved by day {period_days:g} are censored at the observation boundary. Average waiting time uses only cases that started investigation; pending-case ages and waits are reported separately.",
+           f"Cases resolved + cases unresolved = cases arriving in the observation period. SLA compliance is the share of resolved cases completed within {sla_days:g} days of arrival.",
            "Investigator utilization is observed busy time within the observation period divided by available investigator time.",
        ])
 
@@ -428,7 +490,7 @@ def run_monte_carlo(module: str, params: dict, iterations: int = 100, seed: int 
 
 
 def run_sensitivity_analysis(module: str, params: dict, seed: int = 42) -> dict:
-    """Run one-at-a-time positive input perturbations with a fixed seed."""
+    """Run one-at-a-time, bounded input perturbations with a fixed seed."""
     if module not in MODULES:
         raise ValueError(f"Unknown HR simulation module: {module}")
     baseline = run_simulation(module, params, seed)
@@ -436,30 +498,39 @@ def run_sensitivity_analysis(module: str, params: dict, seed: int = 42) -> dict:
     baseline_value = next(row["Value"] for row in baseline["kpis"] if row["KPI"] == target_kpi)
     if baseline_value is None:
         return {"module": module, "target_kpi": target_kpi, "results": []}
-    probability_inputs = {
-        "screen_rate", "shortlist_rate", "dropout_rate", "offer_rate", "acceptance_rate",
-        "joining_rate", "voluntary", "involuntary", "retirement", "participation",
-        "eligibility_rate", "completion", "pass_rate", "turnover", "grievance_rate",
+    bounds = SENSITIVITY_BOUNDS[module]
+    integer_inputs = {
+        "vacancies", "applicants", "recruiters", "interviewers", "screen_capacity",
+        "workforce", "months", "hires", "employees", "capacity", "total_grievances",
     }
     results = []
     for parameter, current in params.items():
         if isinstance(current, bool) or not isinstance(current, (int, float, np.number)):
             continue
+        if parameter not in bounds:
+            continue
         value = float(current)
-        increase = max(abs(value) * 0.1, 0.01 if parameter in probability_inputs else 1.0)
-        changed = value + increase
-        if parameter in probability_inputs:
-            changed = min(1.0, changed)
-        if parameter == "growth":
-            changed = min(0.2, changed)
+        lower, upper = bounds[parameter]
+        if module == "Employee Attrition & Retention" and parameter in {
+            "voluntary", "involuntary", "retirement",
+        }:
+            other_probabilities = sum(
+                float(params.get(name, 0.0))
+                for name in {"voluntary", "involuntary", "retirement"} - {parameter}
+            )
+            upper = min(upper, 1.0 - other_probabilities)
+        is_integer = parameter in integer_inputs or isinstance(current, np.integer)
+        step = max(abs(value) * 0.1, 1.0 if is_integer else 0.01)
+        changed = min(value + step, upper)
+        direction = "increase"
+        if changed <= value:
+            changed = max(value - step, lower)
+            direction = "decrease"
         if changed == value:
             continue
         changed_params = dict(params)
-        changed_params[parameter] = int(changed) if isinstance(current, (int, np.integer)) else changed
-        try:
-            changed_result = run_simulation(module, changed_params, seed)
-        except ValueError:
-            continue
+        changed_params[parameter] = int(changed) if is_integer else changed
+        changed_result = run_simulation(module, changed_params, seed)
         changed_value = next(row["Value"] for row in changed_result["kpis"] if row["KPI"] == target_kpi)
         if changed_value is None:
             continue
@@ -468,6 +539,7 @@ def run_sensitivity_analysis(module: str, params: dict, seed: int = 42) -> dict:
             "Input": parameter,
             "Baseline": float(value),
             "Perturbed": float(changed_params[parameter]),
+            "Direction": direction,
             "Output change": round(difference, 4),
             "Output change (%)": round(100 * difference / abs(float(baseline_value)), 2)
             if baseline_value else None,
