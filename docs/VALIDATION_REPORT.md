@@ -44,5 +44,7 @@ protection are also covered.
 
 The project environment is Python 3.13 at `hr_simulate\\.venv`. The local
 Streamlit process started successfully; its health endpoint and home page both
-returned HTTP 200. This verifies the locally tested revision. The hosted
-Streamlit Community Cloud app must be checked after this correction is published.
+returned HTTP 200. After publishing commit `060d721`, the hosted Streamlit
+Community Cloud app loaded the dashboard and recruitment module; manager
+insights displayed the revised estimated-spend label. Future deployments still
+require their own live verification.
