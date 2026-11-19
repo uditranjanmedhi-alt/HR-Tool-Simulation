@@ -23,7 +23,7 @@ environment:
 - `compileall -q .` completed successfully.
 - The complete unittest suite passed: 48 tests.
 - Streamlit AppTest passed for dashboard controls, all seven module runs and
-  methodology expanders, report generation and charts for all seven modules,
+  methodology expanders, report generation and PDF charts for all seven modules,
   Aggregate Parameter Mode, Record-Level Analysis Mode, missing-schema
   handling, upload mapping/provenance, exports, Monte Carlo, and sensitivity.
 - `pip check` reported no broken requirements.
@@ -39,5 +39,8 @@ protection are also covered.
 
 The project environment is Python 3.13 at `hr_simulate\\.venv`. Streamlit's
 dependency graph includes Pandas and PyArrow, but the active app path avoids
-Pandas-backed rendering. Passing local tests does not independently verify a new Streamlit Community
-Cloud build.
+Pandas-backed rendering. After publishing, the live Streamlit Community Cloud
+app was opened and verified to render the dashboard and the recruitment module,
+including the new interviewer-capacity input and methodology expander. A live
+check validates the published revision at that time; future deployments still
+require their own verification.

@@ -23,6 +23,7 @@
 - Added methodology, limitations, data dictionary, audit, validation, and changelog documentation.
 - Added a subtle fixed “Made by Udit Ranjan Medhi” watermark across app pages.
 - Published the deployable project to the public `main` branch and deployed it to Streamlit Community Cloud at `https://hr-simulate.streamlit.app`.
+- Published the final-release hardening to `main` and preserved the immediate pre-release state in `backup/main-before-final-hardening-20261119`; the live recruitment page and methodology expander were verified after deployment.
 - Added focused tests for all seven simulation outputs, vacancy caps, input sensitivity, reproducibility, and invalid module names.
 - Removed the main app's Pandas/Arrow-backed rendering path to keep it operational under the host's PyArrow DLL policy; tables use escaped HTML and CSV/Excel processing uses the standard library and OpenPyXL.
 
