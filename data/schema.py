@@ -1,68 +1,47 @@
-# hr_simulate/data/schema.py
-"""Data schema definitions for HR Simulate.
-Provides column name expectations for each entity type.
-"""
+"""Required columns and basic type expectations for module datasets."""
 
-# Define required columns for each synthetic dataset
 SCHEMA = {
     "employees": [
-        "employee_id",
-        "department",
-        "job_level",
-        "salary",
-        "hire_date",
-        "experience_years",
-        "performance_score",
+        "employee_id", "department", "job_level", "salary", "hire_date",
+        "experience_years", "performance_score",
     ],
     "candidates": [
-        "candidate_id",
-        "source",
-        "applied_position",
-        "education_level",
-        "years_experience",
-        "application_date",
+        "candidate_id", "source", "applied_position", "education_level",
+        "years_experience", "application_date",
     ],
     "recruitment_applications": [
-        "application_id",
-        "candidate_id",
-        "vacancy_id",
-        "status",
-        "screening_date",
-        "interview_date",
-        "offer_date",
-        "joined_date",
+        "candidate_id", "application_date", "recruitment_stage", "interview_result",
+        "offer_status", "joining_status", "department",
     ],
     "training_records": [
-        "record_id",
-        "employee_id",
-        "programme_id",
-        "start_date",
-        "end_date",
-        "completion_status",
-        "pre_score",
-        "post_score",
+        "employee_id", "training_programme", "enrolment_date", "completion_status",
+        "assessment_pass", "pre_training_score", "post_training_score",
     ],
     "performance_records": [
-        "record_id",
-        "employee_id",
-        "evaluation_period",
-        "performance_score",
-        "rating",
+        "employee_id", "department", "appraisal_period", "performance_rating",
+        "goal_achievement",
+    ],
+    "workforce_records": [
+        "month", "department", "workforce_supply", "workforce_demand",
+        "productivity_index", "fte_requirement",
     ],
     "compensation_records": [
-        "record_id",
-        "employee_id",
-        "salary",
-        "bonus",
-        "benefits",
-        "effective_date",
+        "employee_id", "department", "base_salary", "allowances",
+        "variable_pay", "benefits",
     ],
     "grievance_records": [
-        "grievance_id",
-        "employee_id",
-        "category",
-        "submission_date",
-        "resolution_date",
-        "outcome",
+        "grievance_id", "date_raised", "grievance_category",
+        "investigation_start_date", "resolution_date", "status",
     ],
+}
+
+NUMERIC_COLUMNS = {
+    "employees": {"salary", "experience_years", "performance_score"},
+    "candidates": {"years_experience"},
+    "training_records": {"pre_training_score", "post_training_score"},
+    "performance_records": {"performance_rating", "goal_achievement"},
+    "workforce_records": {
+        "workforce_supply", "workforce_demand", "productivity_index", "fte_requirement",
+    },
+    "compensation_records": {"base_salary", "allowances", "variable_pay", "benefits"},
 }

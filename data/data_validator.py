@@ -1,46 +1,76 @@
-# hr_simulate/data/data_validator.py
-"""Simple data validation utilities.
-Checks that a DataFrame conforms to the expected schema, reports missing values, duplicates, and column type issues.
-"""
-import pandas as pd
-from .schema import SCHEMA
+"""Schema checks for uploaded or generated HR records."""
 
-def validate_dataframe(df: pd.DataFrame, entity: str) -> dict:
-    """Validate a DataFrame against the schema for a given entity.
+from __future__ import annotations
 
-    Returns a dict with keys:
-    - valid (bool)
-    - summary (str) – short human‑readable report
-    - missing_columns (list)
-    - missing_values (int)
-    - duplicate_ids (int)
-    """
-    required = SCHEMA.get(entity, [])
-    missing_cols = [c for c in required if c not in df.columns]
-    missing_vals = df.isnull().sum().sum()
-    dup = 0
-    id_col = None
-    # Try to infer an ID column (first required column ending with 'id')
-    for col in required:
-        if col.lower().endswith("id") and col in df.columns:
-            id_col = col            break
-    if id_col:
-        dup = df[id_col].duplicated().sum()
-    valid = not missing_cols and missing_vals == 0 and dup == 0
-    summary_parts = []
-    if missing_cols:
-        summary_parts.append(f"Missing columns: {', '.join(missing_cols)}")
-    if missing_vals:
-        summary_parts.append(f"Missing values: {missing_vals}")
-    if dup:
-        summary_parts.append(f"Duplicate IDs ({id_col}): {dup}")
-    if not summary_parts:
-        summary_parts.append("Data looks valid.")
-    summary = "; ".join(summary_parts)
+from math import isfinite
+from typing import Any
+
+from .schema import NUMERIC_COLUMNS, SCHEMA
+
+
+def _records(data: Any) -> list[dict]:
+    if hasattr(data, "to_dict"):
+        return data.to_dict(orient="records")
+    if isinstance(data, list) and all(isinstance(row, dict) for row in data):
+        return data
+    raise TypeError("Validation expects a list of record dictionaries or a tabular object with to_dict().")
+
+
+def validate_dataframe(data: Any, entity: str) -> dict:
+    """Validate schema columns, missing cells, duplicate IDs and numeric values."""
+    if entity not in SCHEMA:
+        raise ValueError(f"Unknown HR dataset schema: {entity}")
+    records = _records(data)
+    columns = list(records[0]) if records else []
+    required = SCHEMA[entity]
+    missing_columns = [column for column in required if column not in columns]
+    missing_cells = sum(
+        value is None or (isinstance(value, str) and not value.strip())
+        for row in records for key, value in row.items() if key in required
+    )
+    id_column = next(
+        (column for column in required if column.lower().endswith("id") and column in columns),
+        None,
+    )
+    duplicate_ids = 0
+    if id_column:
+        ids = [row.get(id_column) for row in records if row.get(id_column) not in (None, "")]
+        duplicate_ids = len(ids) - len(set(map(str, ids)))
+
+    invalid_numeric: dict[str, int] = {}
+    for column in NUMERIC_COLUMNS.get(entity, set()).intersection(columns):
+        invalid = 0
+        for row in records:
+            value = row.get(column)
+            if value is None or (isinstance(value, str) and not value.strip()):
+                continue
+            try:
+                number = float(value)
+            except (TypeError, ValueError):
+                invalid += 1
+                continue
+            if not isfinite(number):
+                invalid += 1
+        if invalid:
+            invalid_numeric[column] = invalid
+    valid = not missing_columns and missing_cells == 0 and duplicate_ids == 0 and not invalid_numeric
+    issues = []
+    if missing_columns:
+        issues.append(f"Missing columns: {', '.join(missing_columns)}")
+    if missing_cells:
+        issues.append(f"Missing cells: {missing_cells}")
+    if duplicate_ids:
+        issues.append(f"Duplicate IDs ({id_column}): {duplicate_ids}")
+    if invalid_numeric:
+        issues.append("Invalid numeric values: " + ", ".join(
+            f"{column} ({count})" for column, count in invalid_numeric.items()
+        ))
     return {
         "valid": valid,
-        "summary": summary,
-        "missing_columns": missing_cols,
-        "missing_values": missing_vals,
-        "duplicate_ids": dup,
+        "summary": "; ".join(issues) if issues else "Data looks valid.",
+        "missing_columns": missing_columns,
+        "missing_values": missing_cells,
+        "duplicate_ids": duplicate_ids,
+        "invalid_numeric_values": invalid_numeric,
+        "record_count": len(records),
     }

@@ -36,18 +36,27 @@ the existing legacy module files, but is not imported by the main dashboard.
 - High-contrast Plotly charts use coordinated blue, teal, violet, amber, coral, and green series colors; PDF reports use a clean print-friendly theme.
 - Seven configurable, reproducible simulation modules with interactive Plotly visualizations.
 - Instant and staged-progress simulation modes.
+- Optional Monte Carlo summaries for stochastic models and one-at-a-time sensitivity analysis for all modules.
 - Dashboard indicators and recruitment funnel, workload, cost, and hiring-efficiency analysis.
 - Editable department headcount mix on the dashboard; changes update the workforce distribution and total employee KPI for the current session.
 - Session-only scenario saving and comparison (up to five scenarios).
 - Seven educational manager case studies and transparent checklist scoring.
-- Local CSV/Excel preview and validation summary.
+- Seed-reproducible, synthetic datasets for all seven modules with CSV and Excel downloads.
+- CSV/Excel preview, explicit Excel worksheet selection, column-to-input mapping, data validation/cleaning choices, and confirmed uploaded-data simulations with provenance.
 - Offline rule-based recommendations and CSV, Excel, and PDF result exports.
 - Synthetic dashboard indicators are labelled illustrative.
 
 All calculations use the entered assumptions and a recorded random seed. Uploaded
-files and scenario state remain in the local Streamlit session. The simulations
+files and scenario state remain in the current Streamlit session. The simulations
 are educational estimates, not predictions about individuals or automated
 employment decisions.
+
+## Model and data documentation
+
+See `docs\MODEL_METHODOLOGY.md`, `docs\DATA_DICTIONARY.md`,
+`docs\ASSUMPTIONS_AND_LIMITATIONS.md`, and `docs\PROJECT_AUDIT.md` for the
+implemented formulas, generated dataset fields, upload mapping behavior, and
+limitations.
 
 ## Tests
 

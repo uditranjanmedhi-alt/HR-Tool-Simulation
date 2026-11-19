@@ -1,32 +1,67 @@
-# hr_simulate/data/data_loader.py
-"""Utility to load CSV or Excel files into a Pandas DataFrame.
-Used by the upload component across modules.
-"""
-import pandas as pd
-import io
+"""CSV/XLSX readers that keep Pandas out of the active app import path."""
 
-def load_file(uploaded_file) -> pd.DataFrame | None:
-    """Load a Streamlit uploaded file into a DataFrame.
+from __future__ import annotations
 
-    Parameters
-    ----------
-    uploaded_file : UploadedFile
-        The file object returned by st.file_uploader.
+import csv
+from io import BytesIO, StringIO
+from typing import Any
 
-    Returns
-    -------
-    pd.DataFrame or None
-        Returns a DataFrame if successful, otherwise None.
-    """
+from openpyxl import load_workbook
+
+
+def excel_sheet_names(filename: str, content: bytes) -> list[str]:
+    """Return worksheet names from an uploaded XLSX file."""
+    if not filename.lower().endswith(".xlsx"):
+        raise ValueError("Worksheet selection is available for .xlsx files.")
+    workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
     try:
-        filename = uploaded_file.name
-        if filename.lower().endswith('.csv'):
-            # read directly from bytes
-            return pd.read_csv(io.BytesIO(uploaded_file.getvalue()))
-        elif filename.lower().endswith(('.xlsx', '.xls')):
-            return pd.read_excel(io.BytesIO(uploaded_file.getvalue()))
-        else:
-            return None
-    except Exception as e:
-        print(f"Error loading file {uploaded_file.name}: {e}")
-        return None
+        return list(workbook.sheetnames)
+    finally:
+        workbook.close()
+
+
+def parse_uploaded_file(
+    filename: str,
+    content: bytes,
+    sheet_name: str | None = None,
+) -> tuple[list[str], list[list[Any]]]:
+    """Read CSV or one explicitly selected XLSX sheet into column and row lists."""
+    lower_name = filename.lower()
+    if lower_name.endswith(".csv"):
+        parsed = list(csv.reader(StringIO(content.decode("utf-8-sig"))))
+    elif lower_name.endswith(".xlsx"):
+        workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
+        try:
+            if sheet_name is None:
+                if len(workbook.sheetnames) != 1:
+                    raise ValueError("Choose an Excel worksheet before loading the data.")
+                sheet_name = workbook.sheetnames[0]
+            if sheet_name not in workbook.sheetnames:
+                raise ValueError(f"Worksheet {sheet_name!r} is not present in the workbook.")
+            worksheet = workbook[sheet_name]
+            parsed = [list(row) for row in worksheet.iter_rows(values_only=True)]
+        finally:
+            workbook.close()
+    else:
+        raise ValueError("Supported upload formats are .csv and .xlsx.")
+    if not parsed:
+        raise ValueError("The uploaded file contains no rows.")
+    headers = [str(value) if value is not None else f"Column {index + 1}"
+               for index, value in enumerate(parsed[0])]
+    seen_headers: dict[str, int] = {}
+    for index, header in enumerate(headers):
+        seen_headers[header] = seen_headers.get(header, 0) + 1
+        if seen_headers[header] > 1:
+            headers[index] = f"{header} ({seen_headers[header]})"
+    rows = [row + [None] * (len(headers) - len(row)) for row in parsed[1:]]
+    return headers, [row[:len(headers)] for row in rows]
+
+
+def load_file(uploaded_file, sheet_name: str | None = None):
+    """Compatibility wrapper returning a DataFrame for legacy callers."""
+    columns, rows = parse_uploaded_file(
+        uploaded_file.name, uploaded_file.getvalue(), sheet_name=sheet_name,
+    )
+    import pandas as pd
+
+    return pd.DataFrame(rows, columns=columns)

@@ -13,11 +13,25 @@ import zipfile
 import numpy as np
 import plotly.graph_objects as go
 import streamlit as st
-from openpyxl import Workbook, load_workbook
+from openpyxl import Workbook
 from openpyxl.utils.exceptions import InvalidFileException
 
 from config.settings import CHART_COLORS, THEME
-from engines.simulation_core import MODULES, run_simulation
+from data.data_loader import excel_sheet_names, parse_uploaded_file
+from data.synthetic_generator import (
+    MODULE_DATASETS,
+    generate_synthetic_data,
+    records_to_csv as synthetic_to_csv,
+    records_to_xlsx as synthetic_to_xlsx,
+)
+from data.upload_pipeline import AGGREGATIONS, DEFAULT_SIMULATION_PARAMS, map_uploaded_data
+from engines.simulation_core import (
+    MODULES,
+    STOCHASTIC_MODULES,
+    run_monte_carlo,
+    run_sensitivity_analysis,
+    run_simulation,
+)
 
 
 st.set_page_config(page_title="HR SIMULATE | Decision Lab", page_icon="🏢", layout="wide")
@@ -122,7 +136,12 @@ def init_state() -> None:
         "random_seed": 42,
         "scenarios": [],
         "latest_results": {},
+        "monte_carlo_results": {},
+        "sensitivity_results": {},
         "uploaded_data": None,
+        "uploaded_source": None,
+        "uploaded_result": None,
+        "synthetic_dataset": None,
         "department_rows": [
             {"id": index + 1, "name": name, "employees": int(default_department_counts[index])}
             for index, name in enumerate(default_department_names)
@@ -171,7 +190,7 @@ def render_sidebar() -> str:
                 st.session_state.active_page = label
                 st.rerun()
     st.sidebar.markdown("---")
-    st.sidebar.caption("Illustrative data · Local session")
+    st.sidebar.caption("Illustrative data · Session-only")
     return st.session_state.active_page
 
 
@@ -282,16 +301,23 @@ def render_insights(module: str, params: dict, result: dict) -> None:
         insights = [
             ("What changed", f"Workforce moves from {values['Initial Workforce']} to {values['Final Workforce']} "
              f"over {params['months']} months."),
+            ("Original cohort", f"{values['Original Cohort Retention (%)']:.1f}% of the initial employees remain; "
+             "replacement hires are tracked separately."),
             ("Pressure point", f"Annualized attrition is {rate:.1f}%; simulated replacement cost is "
              f"{values['Estimated Replacement Cost']:,.0f}."),
             ("Manager action", "Test a lower voluntary-exit assumption alongside replacement hiring and compare final headcount."),
-            ("Trade-off", "More replacement hiring stabilizes headcount but increases hiring demand and associated costs."),
+            ("Workforce movement", f"{values['Total Hires']} hires − {values['Total Exits']} exits = "
+             f"net change of {values['Net Workforce Change']:+,} employees."),
         ]
     elif module == "Learning & Development":
+        roi = values["Estimated Training ROI (%)"]
+        roi_summary = "not defined because training cost is zero" if roi is None else f"{roi:.1f}% estimated"
         insights = [
-            ("Participation", f"{values['Enrolled']} of {values['Employees']} employees are funded for training."),
-            ("Learning outcome", f"{values['Training Completion Rate (%)']:.1f}% completion; estimated ROI "
-             f"is {values['Estimated Training ROI (%)']:.1f}%."),
+            ("Participation", f"{values['Enrolled']} of {values['Training Eligible']} eligible employees enrolled."),
+            ("Learning outcome", f"{values['Training Completion Rate (%)']:.1f}% completion; "
+             f"estimated ROI is {roi_summary}."),
+            ("Score movement", f"Mean score moves from {values['Pre-training Score']:.1f} to "
+             f"{values['Post-training Score']:.1f}; benefit estimate is assumption-based."),
             ("Manager action", "If completion is low, test schedule, delivery method and manager support before increasing spend."),
             ("Trade-off", f"Budget utilization is {values['Budget Utilization (%)']:.1f}%; broader reach may limit per-person investment."),
         ]
@@ -307,11 +333,12 @@ def render_insights(module: str, params: dict, result: dict) -> None:
         gap = values["Workforce Gap"]
         insights = [
             ("Forecast", f"Supply is {values['Forecast Workforce Supply']} against demand of "
-             f"{values['Forecast Workforce Demand']} at the end of the horizon."),
-            ("Staffing", f"{'Shortage' if gap < 0 else 'Surplus'} of {abs(gap)} employees; "
+             f"{values['Required FTE']:.1f} required FTE at the end of the horizon."),
+            ("Staffing", f"{'Shortage' if gap > 0 else 'Surplus'} of {abs(gap):.1f} FTE; "
              f"estimated hiring requirement is {values['Hiring Requirement']}."),
             ("Manager action", "Compare recruitment, internal mobility, retention and productivity assumptions."),
-            ("Trade-off", f"Forecast labour cost is {values['Estimated Labour Cost']:,.0f}; demand growth may increase spend."),
+            ("Capacity & cost", f"Productivity-adjusted capacity is {values['Effective Capacity (workload units)']:.1f} workload units; "
+             f"cumulative labour cost is {values['Estimated Labour Cost']:,.0f}."),
         ]
     elif module == "Compensation & Benefits":
         insights = [
@@ -324,10 +351,13 @@ def render_insights(module: str, params: dict, result: dict) -> None:
     else:
         insights = [
             ("Case volume", f"{values['Total Grievances']} simulated grievances; "
-             f"{values['Pending Grievances']} remain pending."),
+             f"{values['Pending Grievances']} remain open at the end of the observation period."),
             ("Resolution", f"{values['Resolution Rate (%)']:.1f}% resolved in-period at an average "
-             f"{values['Average Resolution Time (days)']} days."),
-            ("Manager action", "Review case capacity and recurring categories; prioritize fair and timely process."),
+             f"{values['Average Resolution Time (days)']} days; average wait was "
+             f"{values['Average Waiting Time (days)']:.1f} days."),
+            ("Service levels", f"{values['SLA Compliance (%)']:.1f}% of resolved cases met the configured SLA; "
+             f"investigator utilization was {values['Investigator Utilization (%)']:.1f}%."),
+            ("Manager action", "Review case capacity, observed queues and recurring categories; prioritize fair and timely process."),
             ("Safeguard", "The simulation does not assess individual grievances or automate disciplinary decisions."),
         ]
     columns = st.columns(2)
@@ -341,6 +371,20 @@ def render_insights(module: str, params: dict, result: dict) -> None:
 def control_key(module: str, name: str) -> str:
     epoch = st.session_state.control_epoch.get(module, 0)
     return f"control_{MODULES[module]}_{epoch}_{name}"
+
+
+def scenario_provenance(module: str, params: dict, seed: int) -> dict:
+    record_count = params.get("applicants", params.get("employees", params.get("workforce", 0)))
+    return {
+        "dataset_source": "Synthetic parameter inputs",
+        "dataset_name": f"{MODULES[module]} scenario assumptions",
+        "record_count": int(record_count),
+        "column_mappings": {},
+        "filters": {},
+        "excluded_records": 0,
+        "missing_value_treatment": "Not applicable; scalar simulation controls",
+        "random_seed": int(seed),
+    }
 
 
 def module_parameters(module: str) -> dict:
@@ -358,6 +402,8 @@ def module_parameters(module: str) -> dict:
             with left:
                 vacancies = number("Vacancies", 1, 1000, 50)
                 applicants = number("Applicants", 1, 10000, 500)
+                cost_per_applicant = number("Recruitment cost per candidate", 1.0, 10000.0,
+                                            100.0, step=25.0)
             with right:
                 budget = number("Recruitment budget", 0.0, 10000000.0, 75000.0, step=5000.0)
         with capacity_tab:
@@ -389,7 +435,8 @@ def module_parameters(module: str) -> dict:
                 "screen_rate": screen_rate, "shortlist_rate": shortlist_rate,
                 "dropout_rate": dropout_rate, "offer_rate": offer_rate,
                 "acceptance_rate": acceptance_rate, "joining_rate": joining_rate,
-                "screen_days": screen_days, "interview_days": interview_days}
+                "screen_days": screen_days, "interview_days": interview_days,
+                "cost_per_applicant": cost_per_applicant}
 
     if module == "Employee Attrition & Retention":
         staffing, assumptions = st.tabs(["Workforce & horizon", "Exit assumptions & cost"])
@@ -410,6 +457,7 @@ def module_parameters(module: str) -> dict:
         program, outcomes = st.tabs(["Program & budget", "Learning outcomes"])
         with program:
             employees = number("Employees in scope", 1, 100000, 500)
+            eligibility_rate = slider("Training eligibility rate", 0.0, 1.0, 1.0, 0.05)
             left, right = st.columns(2)
             with left:
                 budget = number("Training budget", 0.0, 100000000.0, 50000.0, step=5000.0)
@@ -422,11 +470,13 @@ def module_parameters(module: str) -> dict:
             with left:
                 pass_rate = slider("Assessment pass rate", 0.0, 1.0, 0.75, 0.05)
                 learning_gain = slider("Average learning gain (points)", 0.0, 5.0, 1.2, 0.1)
+                pre_training_score = slider("Average pre-training score (0–100)", 0.0, 100.0, 60.0, 1.0)
             with right:
                 value_per_gain = number("Estimated value per gain point", 0.0, 100000.0, 150.0, step=25.0)
         return {"employees": employees, "budget": budget, "cost_per_person": cost_per_person,
-                "participation": participation, "completion": completion, "pass_rate": pass_rate,
-                "learning_gain": learning_gain, "value_per_gain": value_per_gain}
+                "eligibility_rate": eligibility_rate, "participation": participation,
+                "completion": completion, "pass_rate": pass_rate, "learning_gain": learning_gain,
+                "pre_training_score": pre_training_score, "value_per_gain": value_per_gain}
 
     if module == "Performance Management":
         population, intervention = st.tabs(["Review population", "Development & rewards"])
@@ -444,7 +494,7 @@ def module_parameters(module: str) -> dict:
         demand_tab, cost_tab = st.tabs(["Supply & demand", "Productivity & cost"])
         with demand_tab:
             workforce = number("Current workforce", 1, 100000, 500)
-            demand = number("Current workforce demand", 1, 100000, 540)
+            demand = number("Current workload (standard FTE units)", 0.0, 100000.0, 540.0)
             months = slider("Forecast horizon (months)", 1, 60, 12)
             growth = slider("Monthly demand growth", -0.1, 0.2, 0.01, 0.01)
             turnover = slider("Monthly supply attrition", 0.0, 0.2, 0.015, 0.005)
@@ -474,8 +524,10 @@ def module_parameters(module: str) -> dict:
     with capacity_tab:
         capacity = slider("HR case capacity (parallel cases)", 1, 100, 8)
         resolution_days = slider("Average resolution time (days)", 1.0, 90.0, 12.0, 1.0)
+        sla_days = slider("SLA deadline (days)", 1.0, 90.0, 30.0, 1.0)
     return {"employees": employees, "grievance_rate": grievance_rate,
-            "capacity": capacity, "resolution_days": resolution_days}
+            "capacity": capacity, "resolution_days": resolution_days, "sla_days": sla_days,
+            "period_days": 30.0}
 
 
 def chart_result(module: str, series: list[dict]):
@@ -492,9 +544,10 @@ def chart_result(module: str, series: list[dict]):
         fig.update_layout(title="Workforce and monthly exits", xaxis_title="Month",
                           yaxis=dict(title="Workforce"), yaxis2=dict(title="Exits", overlaying="y", side="right"))
     elif module == "Learning & Development":
-        fig = go.Figure(go.Bar(x=[row["Method"] for row in series],
-                               y=[row["Completion (%)"] for row in series], text=[row["Completion (%)"] for row in series]))
-        fig.update_layout(title="Illustrative completion by training method", yaxis_title="Completion (%)", yaxis_range=[0, 100])
+        fig = go.Figure(go.Bar(x=[row["Stage"] for row in series],
+                               y=[row["Employees"] for row in series],
+                               text=[row["Employees"] for row in series]))
+        fig.update_layout(title="Training participation and outcome funnel", yaxis_title="Employees")
     elif module == "Performance Management":
         fig = go.Figure(go.Bar(x=[row["Rating"] for row in series], y=[row["Employees"] for row in series]))
         fig.update_layout(title="Simulated performance rating distribution", xaxis_title="Rating", yaxis_title="Employees")
@@ -503,9 +556,12 @@ def chart_result(module: str, series: list[dict]):
         fig = go.Figure()
         fig.add_trace(go.Scatter(x=months, y=[row["Workforce Supply"] for row in series],
                                  name="Workforce Supply", mode="lines+markers"))
-        fig.add_trace(go.Scatter(x=months, y=[row["Workforce Demand"] for row in series],
-                                 name="Workforce Demand", mode="lines+markers"))
-        fig.update_layout(title="Forecast workforce supply vs demand", xaxis_title="Month", yaxis_title="Employees")
+        fig.add_trace(go.Scatter(x=months, y=[row["Required FTE"] for row in series],
+                                 name="Required FTE", mode="lines+markers"))
+        fig.add_trace(go.Scatter(x=months, y=[row["Effective Capacity (workload units)"] for row in series],
+                                 name="Effective Capacity (workload units)", mode="lines+markers"))
+        fig.update_layout(title="Productivity-adjusted workforce capacity and requirement",
+                          xaxis_title="Month", yaxis_title="FTE / workload units")
     elif module == "Compensation & Benefits":
         fig = go.Figure(go.Histogram(x=[row["Salary"] for row in series], nbinsx=25))
         fig.update_layout(title="Simulated salary distribution", xaxis_title="Salary", yaxis_title="Employees")
@@ -562,13 +618,13 @@ def render_module(module: str) -> None:
         else:
             highlights = {
                 "Employee Attrition & Retention": ["Final Workforce", "Annualized Attrition Rate (%)",
-                                                     "Estimated Replacement Cost", "Retention Rate (%)"],
+                                                     "Estimated Replacement Cost", "Original Cohort Retention (%)"],
                 "Learning & Development": ["Enrolled", "Training Completion Rate (%)",
-                                           "Estimated Training ROI (%)", "Training Cost"],
+                                           "Estimated Training ROI (%)", "Estimated Financial Benefit (assumption-based)"],
                 "Performance Management": ["Average Performance Score After Intervention",
                                           "Goal Achievement Rate (%)", "High Performer Share (%)",
                                           "Employees Requiring Support (%)"],
-                "Workforce Planning": ["Forecast Workforce Supply", "Forecast Workforce Demand",
+                "Workforce Planning": ["Forecast Workforce Supply", "Required FTE",
                                        "Workforce Gap", "Hiring Requirement"],
                 "Compensation & Benefits": ["Average Salary", "Total Compensation Cost",
                                             "Increment Cost", "Benefits Cost"],
@@ -594,7 +650,8 @@ def render_module(module: str) -> None:
         if run or real_time:
             stored = dict(preview)
             stored.update({"params": dict(params), "seed": seed, "module": module,
-                           "timestamp": datetime.now().isoformat(timespec="seconds")})
+                           "timestamp": datetime.now().isoformat(timespec="seconds"),
+                           "provenance": scenario_provenance(module, params, seed)})
             st.session_state.latest_results[module] = stored
             if real_time:
                 progress = st.progress(0, text="Starting simulation")
@@ -615,7 +672,8 @@ def render_module(module: str) -> None:
                 saved = dict(preview)
                 saved.update({"params": dict(params), "seed": seed, "module": module,
                               "timestamp": datetime.now().isoformat(timespec="seconds"),
-                              "name": save_name.strip() or module})
+                              "name": save_name.strip() or module,
+                              "provenance": scenario_provenance(module, params, seed)})
                 st.session_state.scenarios.append(saved)
                 st.success("Scenario saved for comparison.")
 
@@ -692,6 +750,59 @@ def render_module(module: str) -> None:
             render_insights(module, params, preview)
     st.download_button("Download module results (CSV)", records_to_csv(preview["kpis"]),
                        file_name=f"{MODULES[module]}_results.csv", mime="text/csv")
+    with st.expander("Uncertainty and sensitivity analysis"):
+        if module in STOCHASTIC_MODULES:
+            iterations = st.number_input("Monte Carlo iterations", min_value=1, max_value=1000,
+                                         value=100, step=50, key=f"mc_iterations_{MODULES[module]}")
+            if st.button("Run Monte Carlo uncertainty analysis", key=f"mc_run_{MODULES[module]}"):
+                try:
+                    summary = run_monte_carlo(module, params, int(iterations), seed)
+                    summary["params"] = dict(params)
+                    st.session_state.monte_carlo_results[module] = summary
+                except ValueError as error:
+                    st.error(f"Could not run Monte Carlo analysis: {error}")
+            summary = st.session_state.monte_carlo_results.get(module)
+            if summary is not None and summary.get("params") == params and summary.get("seed") == seed:
+                st.caption(f"{summary['iterations']:,} iterations · seed {summary['seed']} · "
+                           f"{summary['interval_label']}")
+                render_table(
+                    ["KPI", "Mean", "Median", "Standard Deviation", "5th Percentile", "95th Percentile"],
+                    [[row["KPI"], row["Mean"], row["Median"], row["Standard Deviation"],
+                      row["5th Percentile"], row["95th Percentile"]]
+                     for row in summary["summaries"]],
+                )
+            elif summary is not None:
+                st.caption("Monte Carlo summary is from earlier inputs; rerun it to refresh.")
+        else:
+            st.caption("This module's current calculations are deterministic; a Monte Carlo interval is not appropriate.")
+        if st.button("Run one-at-a-time sensitivity analysis", key=f"sensitivity_run_{MODULES[module]}"):
+            try:
+                analysis = run_sensitivity_analysis(module, params, seed)
+                analysis["params"] = dict(params)
+                analysis["seed"] = seed
+                st.session_state.sensitivity_results[module] = analysis
+            except ValueError as error:
+                st.error(f"Could not run sensitivity analysis: {error}")
+        analysis = st.session_state.sensitivity_results.get(module)
+        if analysis is not None and analysis.get("params") == params and analysis.get("seed") == seed:
+            st.caption(f"Perturb one input at a time; output: {analysis['target_kpi']}. "
+                       "Stochastic modules use the same seed for each comparison.")
+            if analysis["results"]:
+                sensitivity_fig = go.Figure(go.Bar(
+                    x=[row["Output change"] for row in analysis["results"]],
+                    y=[row["Input"] for row in analysis["results"]],
+                    orientation="h",
+                ))
+                sensitivity_fig.update_layout(title=f"Input sensitivity: {analysis['target_kpi']}",
+                                              xaxis_title="Output change", yaxis_title="Input")
+                st.plotly_chart(styled_chart(sensitivity_fig), width="stretch")
+                render_table(
+                    ["Input", "Baseline", "Perturbed", "Output change", "Output change (%)"],
+                    [[row["Input"], row["Baseline"], row["Perturbed"], row["Output change"],
+                      row["Output change (%)"]] for row in analysis["results"]],
+                )
+            else:
+                st.info("No finite one-at-a-time sensitivity results are available for this baseline.")
 
 
 def render_department_editor() -> tuple[list[str], list[int]]:
@@ -814,14 +925,7 @@ def render_home() -> None:
     left.plotly_chart(styled_chart(chart_result("Recruitment & Talent Acquisition",
                                                 recruitment_demo["series"])),
                       width="stretch")
-    department_performance = rng.normal(3.25, .22, len(departments)).clip(1, 5)
-    performance_fig = go.Figure(go.Bar(x=departments, y=department_performance,
-                                       marker_color=THEME["primary"], text=[f"{v:.2f}" for v in department_performance],
-                                       textposition="auto"))
-    performance_fig.update_layout(title="Illustrative department performance",
-                                  xaxis_title="Department", yaxis_title="Average rating (1–5)",
-                                  yaxis_range=[0, 5])
-    right.plotly_chart(styled_chart(performance_fig), width="stretch")
+    right.info("Department performance is not shown on the synthetic overview without a performance dataset.")
 
     st.markdown("#### Recent simulation activity")
     activity = sorted(st.session_state.latest_results.values(),
@@ -889,8 +993,22 @@ def render_scenarios() -> None:
                                     for row in scenario["kpis"]])
         render_table(["Scenario", "KPI", "Value"], comparison_rows)
         if len({scenario["module"] for scenario in chosen}) == 1:
+            if len({scenario.get("seed") for scenario in chosen}) > 1:
+                st.warning("These stochastic scenarios use different random seeds; some differences may reflect random variation.")
             metric_names = list(dict.fromkeys(row[1] for row in comparison_rows
                                                if isinstance(row[2], (int, float, np.number))))
+            if len(chosen) > 1:
+                baseline_values = {row["KPI"]: row["Value"] for row in chosen[0]["kpis"]}
+                delta_rows = []
+                for scenario in chosen[1:]:
+                    for row in scenario["kpis"]:
+                        baseline_value = baseline_values.get(row["KPI"])
+                        value = row["Value"]
+                        if isinstance(baseline_value, (int, float, np.number)) and isinstance(value, (int, float, np.number)):
+                            delta_rows.append([scenario["name"], row["KPI"], value - baseline_value])
+                if delta_rows:
+                    st.caption(f"Difference from baseline scenario: {chosen[0]['name']}.")
+                    render_table(["Scenario", "KPI", "Change vs. baseline"], delta_rows)
             fig = go.Figure()
             for scenario in chosen:
                 values = {row["KPI"]: row["Value"] for row in scenario["kpis"]}
@@ -907,60 +1025,252 @@ def render_scenarios() -> None:
 
 def render_data_management() -> None:
     st.title("Data Management")
-    st.info("Files are processed in this local Streamlit session; no employee data is sent to external services.")
-    upload = st.file_uploader("Upload CSV or Excel data", type=["csv", "xlsx"])
+    st.info("Uploaded data is processed on the Streamlit app server for this session; no external AI service is used. Follow your organization's policy before uploading sensitive employee data.")
+    st.subheader("Generate synthetic data")
+    synthetic_module = st.selectbox("Dataset for", list(MODULE_DATASETS), key="synthetic_module")
+    generation_cols = st.columns(2)
+    with generation_cols[0]:
+        dataset_size = st.number_input("Synthetic dataset size", min_value=0, max_value=10000,
+                                       value=500, step=50, key="synthetic_size")
+    with generation_cols[1]:
+        synthetic_seed = st.number_input("Synthetic data seed", min_value=0,
+                                         max_value=2147483647, value=42, key="synthetic_seed")
+    if st.button("Generate synthetic dataset", type="primary"):
+        records = generate_synthetic_data(synthetic_module, int(dataset_size), int(synthetic_seed))
+        st.session_state.synthetic_dataset = {
+            "name": f"synthetic_{MODULES[synthetic_module]}.csv",
+            "module": synthetic_module,
+            "records": records,
+            "seed": int(synthetic_seed),
+        }
+    generated = st.session_state.synthetic_dataset
+    if generated is not None:
+        st.caption(f"Synthetic records · {generated['module']} · {len(generated['records']):,} rows · seed {generated['seed']}")
+        st.download_button("Download synthetic CSV", synthetic_to_csv(generated["records"]),
+                           generated["name"], "text/csv")
+        st.download_button("Download synthetic Excel", synthetic_to_xlsx(generated["records"]),
+                           generated["name"].replace(".csv", ".xlsx"),
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    st.subheader("Upload company data")
+    upload_epoch = int(st.session_state.get("upload_epoch", 0))
+    upload = st.file_uploader("Upload CSV or Excel data", type=["csv", "xlsx"],
+                              key=f"company_upload_{upload_epoch}")
     if upload is not None:
+        content = upload.getvalue()
+        source = st.session_state.uploaded_source
+        if source is None or source["name"] != upload.name or source["content"] != content:
+            st.session_state.uploaded_source = {"name": upload.name, "content": content}
+            st.session_state.uploaded_data = None
+            st.session_state.uploaded_result = None
+
+    source = st.session_state.uploaded_source
+    if source is not None and st.button("Clear uploaded file and cancel mapping"):
+        st.session_state.upload_epoch = upload_epoch + 1
+        st.session_state.uploaded_source = None
+        st.session_state.uploaded_data = None
+        st.session_state.uploaded_result = None
+        st.rerun()
+
+    if source is not None:
         try:
-            content = upload.getvalue()
-            if upload.name.lower().endswith(".csv"):
-                parsed = list(csv.reader(io.StringIO(content.decode("utf-8-sig"))))
-            else:
-                workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
-                worksheet = workbook.active
-                parsed = [list(row) for row in worksheet.iter_rows(values_only=True)]
-                workbook.close()
-            if not parsed:
-                raise ValueError("The uploaded file contains no rows.")
-            headers = [str(value) if value is not None else f"Column {index + 1}"
-                       for index, value in enumerate(parsed[0])]
-            data_rows = [row + [None] * (len(headers) - len(row)) for row in parsed[1:]]
-            data_rows = [row[:len(headers)] for row in data_rows]
-            st.session_state.uploaded_data = {"columns": headers, "rows": data_rows}
+            sheet_name = None
+            if source["name"].lower().endswith(".xlsx"):
+                sheet_names = excel_sheet_names(source["name"], source["content"])
+                if not sheet_names:
+                    raise ValueError("The uploaded workbook contains no worksheets.")
+                sheet_name = st.selectbox("Excel worksheet", sheet_names, key="company_sheet")
+            headers, data_rows = parse_uploaded_file(
+                source["name"], source["content"], sheet_name=sheet_name,
+            )
+            st.session_state.uploaded_data = {
+                "columns": headers, "rows": data_rows, "name": source["name"],
+                "sheet": sheet_name, "source": "Uploaded company data",
+            }
         except (ValueError, OSError, UnicodeDecodeError, csv.Error, zipfile.BadZipFile,
                 InvalidFileException) as error:
             st.error(f"Could not read the uploaded file: {error}")
             return
-        st.success(f"Loaded {len(data_rows):,} rows and {len(headers):,} columns. This data is not silently mapped to a simulation.")
-    data = st.session_state.uploaded_data
-    if data is not None:
-        st.subheader("Preview")
-        headers = data["columns"]
-        rows = data["rows"]
-        render_table(headers, rows[:20])
-        missing = [sum(value is None or value == "" for value in (row[index] for row in rows))
-                   for index in range(len(headers))]
-        duplicate_rows = len(rows) - len({tuple(str(value) for value in row) for row in rows})
-        validation_rows = []
-        for index, column in enumerate(headers):
-            values = [row[index] for row in rows if row[index] is not None and row[index] != ""]
-            if not values:
-                data_type = "empty"
-            elif all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
-                data_type = "numeric"
-            else:
-                data_type = "mixed/text"
-            validation_rows.append([column, data_type, missing[index]])
-        st.subheader("Validation report")
-        st.write(f"Duplicate rows: **{duplicate_rows:,}** · Missing cells: **{sum(missing):,}**")
-        render_table(["Column", "Data type", "Missing values"], validation_rows)
-        st.download_button("Download validation report",
-                           rows_to_csv(["Column", "Data type", "Missing values"], validation_rows),
-                           "validation_report.csv", "text/csv")
-        st.download_button("Download uploaded data as CSV", rows_to_csv(headers, rows),
-                           "data_export.csv", "text/csv")
-        st.caption("Column mappings are intentionally explicit: review the preview and align the uploaded columns with the module inputs before using the data.")
+    uploaded = st.session_state.uploaded_data
+    data_options = []
+    if uploaded is not None:
+        data_options.append(f"Uploaded: {uploaded['name']}")
+    if generated is not None:
+        data_options.append(f"Synthetic: {generated['module']}")
+    if not data_options:
+        st.write("Generate a synthetic dataset or upload a company CSV/XLSX file to inspect and map its data.")
+        return
+    selected_source = st.radio("Dataset to inspect and use", data_options, horizontal=True)
+    if selected_source.startswith("Uploaded:"):
+        data = uploaded
     else:
-        st.write("Synthetic datasets and module-level parameter controls are available without uploading a file.")
+        records = generated["records"]
+        headers = list(records[0]) if records else ["synthetic"]
+        data = {
+            "columns": headers,
+            "rows": [[record.get(column) for column in headers] for record in records],
+            "name": generated["name"],
+            "sheet": None,
+            "source": "Synthetic data",
+        }
+    headers, rows = data["columns"], data["rows"]
+    st.subheader("Dataset preview")
+    st.caption(f"{data['source']} · {data['name']} · {len(rows):,} records")
+    render_table(headers, rows[:20])
+    missing = [sum(value is None or value == "" for value in (row[index] for row in rows))
+               for index in range(len(headers))]
+    duplicate_rows = len(rows) - len({tuple(repr(value) for value in row) for row in rows})
+    validation_rows = []
+    for index, column in enumerate(headers):
+        values = [row[index] for row in rows if row[index] is not None and row[index] != ""]
+        if not values:
+            data_type = "empty"
+        elif all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
+            data_type = "numeric"
+        else:
+            data_type = "mixed/text"
+        validation_rows.append([column, data_type, missing[index]])
+    st.subheader("Validation report")
+    st.write(f"Duplicate rows: **{duplicate_rows:,}** · Missing cells: **{sum(missing):,}**")
+    render_table(["Column", "Data type", "Missing values"], validation_rows)
+    st.download_button("Download validation report",
+                       rows_to_csv(["Column", "Data type", "Missing values"], validation_rows),
+                       "validation_report.csv", "text/csv")
+    st.download_button("Download selected dataset as CSV", rows_to_csv(headers, rows),
+                       "data_export.csv", "text/csv")
+
+    st.subheader("Explicit module mapping")
+    module = st.selectbox("Simulation module", list(MODULES), key="uploaded_module")
+    defaults = DEFAULT_SIMULATION_PARAMS[module]
+    mappings: dict[str, str] = {}
+    aggregations: dict[str, str] = {}
+    with st.expander("Map source columns to simulation inputs", expanded=True):
+        st.caption("No column is auto-mapped. Unmapped inputs retain the defaults shown below.")
+        for index, (parameter, default_value) in enumerate(defaults.items()):
+            columns = st.columns([1.2, 1, .9])
+            with columns[0]:
+                st.caption(f"{parameter} · default {default_value}")
+            with columns[1]:
+                column_name = st.selectbox(
+                    f"Column for {parameter}",
+                    ["— Leave at default —", *headers],
+                    key=f"upload_map_{module}_{parameter}",
+                    label_visibility="collapsed",
+                )
+            with columns[2]:
+                aggregation = st.selectbox(
+                    f"Aggregation for {parameter}", AGGREGATIONS,
+                    key=f"upload_agg_{module}_{parameter}",
+                    label_visibility="collapsed",
+                )
+            if column_name != "— Leave at default —":
+                mappings[parameter] = column_name
+                aggregations[parameter] = aggregation
+
+    cleaning_cols = st.columns(3)
+    with cleaning_cols[0]:
+        missing_treatment = st.selectbox(
+            "Missing mapped values",
+            ["exclude affected rows", "median-fill numeric columns"],
+        )
+    with cleaning_cols[1]:
+        invalid_treatment = st.selectbox(
+            "Invalid mapped values",
+            ["stop if invalid values exist", "replace invalid values with explicit number",
+             "exclude rows with invalid values"],
+        )
+    with cleaning_cols[2]:
+        duplicate_treatment = st.selectbox(
+            "Duplicate records", ["keep duplicates", "exclude duplicate rows"],
+        )
+    invalid_replacements = {}
+    if invalid_treatment == "replace invalid values with explicit number" and mappings:
+        st.caption("Enter the numeric value to use for invalid cells in each mapped input.")
+        replacement_cols = st.columns(2)
+        for index, parameter in enumerate(mappings):
+            default_value = defaults[parameter]
+            with replacement_cols[index % 2]:
+                invalid_replacements[parameter] = st.number_input(
+                    f"Replacement for {parameter}",
+                    value=float(default_value) if default_value is not None else 0.0,
+                    key=f"invalid_replacement_{module}_{parameter}",
+                )
+    seed = int(st.number_input("Simulation random seed", min_value=0, max_value=2147483647,
+                               value=42, key="uploaded_simulation_seed"))
+    mapped_params = None
+    provenance = None
+    try:
+        mapped_params, provenance, validation = map_uploaded_data(
+            headers, rows, mappings, aggregations, defaults,
+            missing_treatment=missing_treatment,
+            invalid_treatment=invalid_treatment,
+            duplicate_treatment=duplicate_treatment,
+            invalid_replacements=invalid_replacements,
+            random_seed=seed,
+            dataset_name=data["name"] + (f" · {data['sheet']}" if data["sheet"] else ""),
+            dataset_source=data["source"],
+        )
+        if data["source"] == "Synthetic data":
+            provenance["dataset_generation_seed"] = generated["seed"]
+            provenance["generated_for_module"] = generated["module"]
+        st.write(
+            f"Mapped and retained **{validation['retained_records']:,} / {validation['input_records']:,}** "
+            f"records; excluded **{validation['excluded_records']:,}**. "
+            f"Mapped missing cells: {validation['missing_cells_in_mapped_columns']:,}; "
+            f"invalid values: {validation['invalid_cells_in_mapped_columns']:,}."
+        )
+        with st.expander("Review resolved simulation inputs and provenance"):
+            render_table(["Input", "Value"], [[key, value] for key, value in mapped_params.items()])
+            render_table(["Mapped input", "Source column", "Aggregation"], [
+                [key, value["column"], value["aggregation"]]
+                for key, value in provenance["column_mappings"].items()
+            ])
+    except ValueError as error:
+        st.warning(str(error))
+
+    confirm = st.checkbox(
+        "I reviewed the column mappings, missing/invalid-value treatment and duplicate handling."
+    )
+    if st.button("Run simulation with selected data", type="primary",
+                 disabled=not confirm or mapped_params is None):
+        if mapped_params is None or provenance is None:
+            st.error("Resolve mapping and validation issues before running.")
+            return
+        try:
+            result = run_simulation(module, mapped_params, seed)
+        except (KeyError, TypeError, ValueError) as error:
+            st.error(f"Simulation inputs are invalid: {error}")
+            return
+        result.update({
+            "params": dict(mapped_params), "seed": seed, "module": module,
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+            "provenance": provenance,
+        })
+        st.session_state.uploaded_result = result
+        st.session_state.latest_results[module] = result
+        st.success("Simulation completed with the confirmed dataset and mappings.")
+    result = st.session_state.uploaded_result
+    if result is not None:
+        st.subheader("Uploaded-data simulation result")
+        st.caption(f"{result['module']} · {result['provenance']['dataset_source']} · "
+                   f"{result['provenance']['record_count']:,} retained records · seed {result['seed']}")
+        show_kpis(result["kpis"])
+        left, right = st.columns([1.4, 1])
+        left.plotly_chart(chart_result(result["module"], result["series"]), width="stretch")
+        right.markdown("**Data provenance**")
+        right.json(result["provenance"])
+        st.download_button(
+            "Download uploaded-data results (CSV)", records_to_csv(result["kpis"]),
+            f"{MODULES[result['module']]}_uploaded_results.csv", "text/csv",
+        )
+        if st.button("Save uploaded-data result to scenario comparison"):
+            if len(st.session_state.scenarios) >= 5:
+                st.warning("The scenario library is limited to five. Remove a saved scenario before adding another.")
+            else:
+                saved = dict(result)
+                saved["name"] = f"{result['module']} · {result['provenance']['dataset_name']}"
+                st.session_state.scenarios.append(saved)
+                st.success("Uploaded-data result saved for comparison.")
 
 
 def render_recommendations() -> None:
@@ -979,8 +1289,8 @@ def render_recommendations() -> None:
             advice.append("Review recruiter capacity and interview scheduling; estimated time to fill is above 30 days.")
         if module == "Learning & Development" and values.get("Training Completion Rate (%)", 0) < 70:
             advice.append("Investigate scheduling, relevance and manager support; simulated completion is below 70%.")
-        if module == "Workforce Planning" and values.get("Workforce Gap", 0) < 0:
-            advice.append(f"Forecast supply is below demand by {abs(int(values['Workforce Gap']))} employees; assess hiring, internal mobility and productivity.")
+        if module == "Workforce Planning" and values.get("Workforce Gap", 0) > 0:
+            advice.append(f"Forecast available FTE is below required FTE by {values['Workforce Gap']:.1f}; assess hiring, internal mobility and productivity.")
         if module == "Employee Relations" and values.get("Pending Grievances", 0) > 0:
             advice.append("Review case capacity and resolution processes; pending grievances remain in the simulation.")
         if module == "Compensation & Benefits":
@@ -1001,8 +1311,17 @@ def render_reports() -> None:
     report = results[selected_index]
     st.subheader(report["module"])
     st.write(f"Simulation time: {report['timestamp']} · Random seed: {report['seed']}")
+    provenance = report.get("provenance", scenario_provenance(report["module"], report["params"], report["seed"]))
+    st.write(
+        f"Dataset: {provenance['dataset_source']} · {provenance['dataset_name']} · "
+        f"{provenance['record_count']:,} records; {provenance['excluded_records']:,} excluded."
+    )
     st.write("Objective: explore the effect of configurable HR assumptions using an illustrative simulation.")
     render_table(["KPI", "Value"], [[row["KPI"], row["Value"]] for row in report["kpis"]])
+    if report.get("notes"):
+        st.subheader("Assumptions and limitations")
+        for note in report["notes"]:
+            st.markdown(f"- {note}")
     csv_bytes = records_to_csv(report["kpis"])
     st.download_button("Download KPI report (CSV)", csv_bytes, "hr_simulation_report.csv", "text/csv")
     excel = BytesIO()
@@ -1023,6 +1342,14 @@ def render_reports() -> None:
     inputs_sheet.append(["Input", "Value"])
     for key, value in report["params"].items():
         inputs_sheet.append([key, value])
+    assumptions_sheet = workbook.create_sheet("Assumptions")
+    assumptions_sheet.append(["Assumption / limitation"])
+    for note in report.get("notes", []):
+        assumptions_sheet.append([note])
+    provenance_sheet = workbook.create_sheet("Data Provenance")
+    provenance_sheet.append(["Field", "Value"])
+    for key, value in provenance.items():
+        provenance_sheet.append([key, str(value)])
     workbook.save(excel)
     st.download_button("Download report (Excel)", excel.getvalue(), "hr_simulation_report.xlsx",
                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -1048,11 +1375,23 @@ def render_reports() -> None:
                                    ("ROWBACKGROUNDS", (0, 1), (-1, -1),
                                     [colors.HexColor("#EFF6FF"), colors.HexColor("#FFFFFF")])]))
         report_content = [Paragraph("HR SIMULATE — Simulation Report", styles["Title"]),
-                          Paragraph(f"{report['module']} · {report['timestamp']}", styles["Normal"]),
+                          Paragraph(f"{html.escape(report['module'])} · {html.escape(report['timestamp'])}", styles["Normal"]),
+                          Paragraph(f"Dataset: {html.escape(str(provenance['dataset_source']))} · "
+                                    f"{html.escape(str(provenance['dataset_name']))} · "
+                                    f"{provenance['record_count']} retained, {provenance['excluded_records']} excluded",
+                                    styles["BodyText"]),
                           Spacer(1, 14), Paragraph("Inputs", styles["Heading2"]),
-                          Paragraph(str(report["params"]), styles["BodyText"]),
+                          Paragraph(html.escape(str(report["params"])), styles["BodyText"]),
                           Spacer(1, 14), Paragraph("Key outcomes", styles["Heading2"]), table,
-                          Spacer(1, 14), Paragraph("Limitations: illustrative simulation based on stated assumptions; not a prediction or decision about an individual.", styles["BodyText"])]
+                          Spacer(1, 14), Paragraph("Assumptions and interpretation", styles["Heading2"])]
+        for note in report.get("notes", []):
+            report_content.append(Paragraph(html.escape(note), styles["BodyText"]))
+        report_content.append(Spacer(1, 14))
+        report_content.append(Paragraph(
+            "Limitations: illustrative simulation based on stated assumptions; "
+            "not a prediction or decision about an individual.",
+            styles["BodyText"],
+        ))
         def draw_report_background(canvas, _document):
             canvas.saveState()
             canvas.setFillColor(colors.HexColor("#FFFFFF"))
@@ -1070,17 +1409,21 @@ def render_documentation() -> None:
     st.subheader("Simulation methodology")
     st.markdown(
         """
-        - **Attrition:** monthly exits are sampled from the configured combined exit probability; the annualized rate compounds the simulated monthly rate.
-        - **Recruitment:** counts flow through a configurable funnel; estimated time-to-fill reflects screening and interview effort divided by available capacity.
-        - **Learning:** participation, completion and assessment outcomes are sequential rates; ROI uses the entered estimated value per learning point.
-        - **Performance:** ratings are reproducibly sampled from a clipped normal distribution; this is not an individual prediction.
-        - **Workforce planning:** headcount demand and supply are compounded over the forecast horizon using stated growth and attrition assumptions.
-        - **Compensation:** salaries are reproducibly sampled and clipped to a plausible range, then adjusted by the entered reward percentages.
-        - **Employee relations:** grievance volume is sampled from a Poisson model; available monthly throughput is limited by parallel capacity and resolution time.
+        - **Recruitment:** deterministic stage counts are floored sequentially; recruitment budget limits candidate reach using the configurable cost-per-applicant assumption. Time to fill is estimated from screening/interview effort and available capacity.
+        - **Attrition:** each employee has mutually exclusive monthly voluntary, involuntary and retirement exit outcomes. Monthly attrition uses exits per employee-month exposure; annualized attrition compounds the average monthly rate. Original cohort retention excludes replacement hires.
+        - **Learning & Development:** eligibility, participation, enrollment, completion and assessment are separate stages. Estimated financial benefit is passed assessments × observed score gain × configured value per point. ROI = (estimated benefit − training cost) / training cost; it is undefined for zero cost.
+        - **Performance:** ratings are sampled from a normal distribution clipped to 1–5. The intervention adds assumed rating points. The reward budget is shared equally by simulated ratings of 4 or higher.
+        - **Workforce planning:** workload and supply are forecast monthly. Required FTE = workload / productivity index; effective capacity = available FTE × productivity index. Gap = required FTE − available FTE. Labour cost sums each month’s workforce supply × monthly cost.
+        - **Compensation:** salaries are sampled from a normal distribution, clipped to 20,000–300,000 in the same currency units as the salary input. Increment, bonus and benefits are percentages of base salary.
+        - **Employee relations:** grievance arrivals use a Poisson model over the observation period. Cases join a FIFO SimPy queue with parallel investigators and exponentially distributed service times. Open cases remain pending at the period boundary; SLA compliance is calculated among resolved cases.
 
-        **Glossary:** Attrition — employees leaving during a period; time to fill — estimated duration to fill a vacancy; training ROI — estimated net return divided by training cost; workforce gap — supply minus demand.
+        **Data:** Synthetic records are reproducible for a fixed seed and labelled synthetic. Uploaded CSV/XLSX data must be explicitly mapped to simulation inputs; unmapped inputs retain displayed defaults. Missing, invalid and duplicate records are handled only according to the selected cleaning options, with exclusions and mappings recorded in result provenance.
 
-        All outputs are educational estimates. Validate assumptions and applicable policies before real-world use. This application does not make hiring, firing, promotion, compensation, or disciplinary decisions.
+        **Uncertainty:** Monte Carlo analysis is available only for stochastic modules. Its 5th–95th percentiles describe simulated variation, not statistical confidence intervals. One-at-a-time sensitivity analysis perturbs numeric inputs and reuses the same seed for comparison.
+
+        **Glossary:** Monthly attrition — exits per employee-month exposure; annualized attrition — compounded monthly rate; cohort retention — starting employees still employed divided by starting workforce; workload unit — work equivalent to one FTE at productivity index 1.0; workforce gap — required FTE minus available FTE.
+
+        These models use stated assumptions and are not empirically validated predictions. Estimated training benefit is assumption-based and does not establish causality. Validate assumptions and applicable policies before real-world use. This application does not make hiring, firing, promotion, compensation, or disciplinary decisions.
         """
     )
     st.subheader("Session settings")
