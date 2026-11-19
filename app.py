@@ -896,12 +896,23 @@ def render_home() -> None:
     learning_values = {row["KPI"]: row["Value"] for row in learning_demo["kpis"]}
     workforce_values = {row["KPI"]: row["Value"] for row in workforce_demo["kpis"]}
     recruitment_values = {row["KPI"]: row["Value"] for row in recruitment_demo["kpis"]}
+    processing_effort = recruitment_values.get(
+        "Estimated Recruitment Processing Effort (person-days)"
+    )
+    if processing_effort is None:
+        st.error(
+            "The loaded recruitment engine did not provide processing effort. "
+            "Redeploy the app to synchronize the dashboard and simulation engine."
+        )
+        processing_effort_display = "Unavailable"
+    else:
+        processing_effort_display = f"{processing_effort} person-days"
     dashboard_metrics = [
         ("Total employees", f"{employees:,}"),
         ("Annualized workforce attrition", f"{demo_values['Annualized Attrition Rate (%)']}%"),
         ("Open positions", f"{max(0, recruitment_values['Vacancies'] - recruitment_values['Employees Joined']):,}"),
         ("Recruitment processing effort",
-         f"{recruitment_values['Estimated Recruitment Processing Effort (person-days)']} person-days"),
+         processing_effort_display),
         ("Training completion", f"{learning_values['Training Completion Rate (%)']}%"),
         ("Workforce productivity", f"{workforce_values['Productivity Index']}%"),
     ]

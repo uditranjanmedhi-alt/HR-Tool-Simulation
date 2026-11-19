@@ -16,6 +16,10 @@ class DashboardDepartmentTests(unittest.TestCase):
         self.assertFalse(app.exception, [item.message for item in app.exception])
 
         initial_total = int(next(item for item in app.metric if item.label == "Total employees").value)
+        recruitment_effort = next(
+            item for item in app.metric if item.label == "Recruitment processing effort"
+        )
+        self.assertIn("person-days", recruitment_effort.value)
         first_department = next(
             item for item in app.number_input if item.label == "Employees in department 1"
         )
