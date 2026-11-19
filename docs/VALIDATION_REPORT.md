@@ -18,22 +18,26 @@ environment:
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-## Results (2026-11-19)
+## Results (2026-11-19, final-release hardening)
 
 - `compileall -q .` completed successfully.
-- The complete unittest suite passed: 36 tests.
-- Streamlit AppTest coverage passed for dashboard controls, all seven module
-  runs, Aggregate Parameter Mode, Record-Level Analysis Mode, missing-schema
+- The complete unittest suite passed: 48 tests.
+- Streamlit AppTest passed for dashboard controls, all seven module runs and
+  methodology expanders, report generation and charts for all seven modules,
+  Aggregate Parameter Mode, Record-Level Analysis Mode, missing-schema
   handling, upload mapping/provenance, exports, Monte Carlo, and sensitivity.
 - `pip check` reported no broken requirements.
 
-The full suite also verifies recruitment actual-spend and zero-hire handling,
-attrition denominators and cohort accounting, employee-relations queue
-conservation and censored waits, performance reward allocation, record-level
-paired summaries, bounded sensitivity inputs, stochastic reproducibility, and
-zero-volume boundaries.
+Formula and boundary coverage includes recruitment expenditure from funded
+applicants, zero hires and interviewer capacity; separate attrition rates and
+original-cohort accounting; observation-horizon-scaled grievance arrivals,
+queue conservation, SLA denominators and censored waits; corrected learning
+benefit and compensation units; workforce gap rounding; record-level duplicate
+and range checks; bounded sensitivity inputs; stochastic reproducibility; and
+zero-volume boundaries. Upload limits and spreadsheet formula-injection
+protection are also covered.
 
 The project environment is Python 3.13 at `hr_simulate\\.venv`. Streamlit's
 dependency graph includes Pandas and PyArrow, but the active app path avoids
-Pandas-backed rendering. Passing local tests does not independently verify a
-new Streamlit Community Cloud build.
+Pandas-backed rendering. Passing local tests does not independently verify a new Streamlit Community
+Cloud build.

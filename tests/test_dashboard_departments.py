@@ -11,6 +11,18 @@ APP_PATH = Path(__file__).resolve().parents[1] / "app.py"
 
 
 class DashboardDepartmentTests(unittest.TestCase):
+    def test_zero_hires_render_cost_per_hire_as_na(self):
+        app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+        next(item for item in app.button
+             if item.key == "nav_Recruitment & Talent Acquisition").click()
+        app.run()
+        next(item for item in app.slider
+             if item.label == "Joining rate after acceptance").set_value(0.0)
+        app.run()
+        self.assertFalse(app.exception, [item.message for item in app.exception])
+        cost_per_hire = next(item for item in app.metric if item.label == "Cost per hire (INR/hire)")
+        self.assertEqual(cost_per_hire.value, "N/A")
+
     def test_department_headcounts_update_dashboard_and_rows_can_be_managed(self):
         app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
         self.assertFalse(app.exception, [item.message for item in app.exception])
@@ -51,12 +63,20 @@ class DashboardDepartmentTests(unittest.TestCase):
                 next(item for item in app.button if item.key == f"nav_{module}").click()
                 app.run()
                 self.assertFalse(app.exception, [item.message for item in app.exception])
+                self.assertTrue(any(
+                    "Methodology" in item.label for item in app.expander
+                ))
                 next(item for item in app.button if item.key == f"run_{module_key}").click()
                 app.run()
                 self.assertFalse(app.exception, [item.message for item in app.exception])
         next(item for item in app.button if item.key == "nav_Reports & Exports").click()
         app.run()
         self.assertFalse(app.exception, [item.message for item in app.exception])
+        report_selector = next(item for item in app.selectbox if item.label == "Select a simulation")
+        for option in report_selector.options:
+            next(item for item in app.selectbox if item.label == "Select a simulation").set_value(option)
+            app.run()
+            self.assertFalse(app.exception, [item.message for item in app.exception])
         report_downloads = [item.label for item in app.get("download_button")]
         self.assertIn("Download KPI report (CSV)", report_downloads)
         self.assertIn("Download report (Excel)", report_downloads)

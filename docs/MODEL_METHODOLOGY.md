@@ -8,17 +8,19 @@ descriptive path and does not convert individual records into scalar inputs.
 ## Recruitment & Talent Acquisition
 
 - Funded applicants = min(applicants, floor(recruitment budget / cost per applicant)).
-- Actual recruitment spend = funded applicants × cost per applicant. Unused
-  budget is not treated as expenditure.
-- Cost per hire = actual recruitment spend / employees joined; it is undefined
-  when no employees join.
+- Actual recruitment spend (INR) = funded applicants × cost per applicant.
+  Unused budget is not treated as expenditure.
+- Cost per hire (INR/hire) = actual recruitment spend / employees joined; it
+  is undefined when no employees join.
 - Screened, shortlisted, interviewed, offered, accepted, and joined counts are
   computed sequentially with floors. Joined candidates are capped at vacancies.
+- Screening is capped at recruiters × scenario screening capacity; interview
+  volume is capped at interviewers × scenario interview capacity. These are
+  scenario-wide throughput caps, not calendar schedules.
 - Estimated recruitment processing effort (person-days) = screened candidates
   × screening effort per candidate + interviewed candidates × interview effort
   per candidate. This is a work-effort measure, not elapsed calendar
-  time-to-fill; recruiter and interviewer counts constrain throughput but are
-  not used to estimate a calendar schedule.
+  time-to-fill.
 
 This is a deterministic aggregate funnel, not an individual applicant outcome
 model.
@@ -34,16 +36,18 @@ of exit probabilities cannot exceed 1.
   employee-month exposure × 100.
 - Annualized workforce attrition (%) = (1 − (1 − pooled monthly rate)^12) ×
   100. This compounds the pooled monthly exposure rate.
-- Period workforce attrition (%) = (1 − the product, across months, of
-  (1 − monthly exits / that month's opening workforce)) × 100. Its denominator
-  is each month's opening workforce, including replacement hires in later
-  months.
+- Compounded period workforce attrition (%) = (1 − the product, across months,
+  of (1 − monthly exits / that month's opening workforce)) × 100. Each month's
+  denominator is its opening workforce, including replacement hires in later
+  months. This is distinct from original-cohort retention.
 - Original cohort exits count only employees in the starting workforce who
   exited during the period.
 - Original cohort retention (%) = original-cohort employees still employed /
   initial workforce × 100. Replacement hires are tracked separately and do not
   enter this denominator.
 - Net workforce change = final workforce − initial workforce.
+- Estimated replacement cost (INR) = simulated exits × assumed replacement
+  cost per exit.
 
 The monthly, annualized, period, and cohort metrics describe different
 denominators and are not interchangeable.
@@ -55,8 +59,8 @@ denominators and are not interchangeable.
 - Enrollment is capped by budget / cost per enrollee.
 - Completion and assessment passes apply their configured sequential rates.
 - Post score = min(100, pre score + assumed gain).
-- Estimated financial benefit = assessment passes × observed score gain ×
-  assumed monetary value per score point.
+- Estimated financial benefit (INR) = assessment passes × observed score gain ×
+  assumed INR value per score point.
 - ROI (%) = 100 × (estimated benefit − training cost) / training cost.
 
 Record-Level Analysis Mode summarizes observed scores and uses only records
@@ -73,8 +77,9 @@ adds the same configured point effect to every baseline score, then clips again
 to 1–5. It is a scenario assumption, not an estimated intervention effect.
 
 The full reward budget is split equally across simulated employees rated 4 or
-higher; if no employee reaches 4, nothing is allocated. The model does not
-support causal claims or individual employment decisions.
+higher; if no employee reaches 4, nothing is allocated. Reward inputs and
+allocations use INR. The model does not support causal claims or individual
+employment decisions.
 
 Record-Level Analysis Mode can optionally calculate matched employee pre/post
 rating changes and a difference between two groups' mean changes when two
@@ -94,25 +99,29 @@ index of 1.0 corresponds to one FTE's standard capacity.
 - Workforce gap = required FTE − available FTE; a positive value is a shortage.
 - Hiring requirement = ceiling of a positive gap.
 - Total labour cost = sum over forecast months of monthly workforce supply ×
-  monthly labour cost per employee.
+  monthly labour cost per employee. The app inputs and totals are in INR over
+  the selected forecast horizon.
 
 ## Compensation & Benefits
 
-Each employee's base salary is sampled from a normal distribution and clipped
-to 20,000–300,000 in the same currency units as the salary input. Increment,
-bonus, and benefit costs are each a configured percentage of base payroll. This
-is a scenario cost model, not an equity analysis.
+Each employee's annual base salary is sampled from a normal distribution and
+clipped to INR 20,000–300,000. Increment, bonus, and benefit costs are each a
+configured percentage of annual base payroll. This is a scenario cost model,
+not an equity analysis.
 
 Record-Level Analysis Mode summarizes base salary, allowances, variable pay,
 benefits, and per-record total compensation for complete records.
 
 ## Employee Relations
 
-The number of grievances during the observation period is Poisson distributed
-with mean employee count × monthly grievance rate. Given the count, arrival
-times are uniform over the period. Cases enter a FIFO SimPy resource queue with
-the configured number of investigators; individual service times are
-exponentially distributed with the configured mean and a 0.01-day minimum.
+Unless a grievance count is supplied explicitly, the number of cases during
+the observation period is Poisson distributed with expected count = employee
+count × monthly grievance rate × observation days / 30. Conditional on the
+count, arrival times are uniform over the period. When a count is supplied, it
+is fixed and arrival times are still uniform. Cases enter a FIFO SimPy resource
+queue with the configured number of investigators; individual service
+durations follow an exponential distribution with the configured scale and a
+0.01-day minimum.
 
 - Average waiting time uses only cases that started investigation, so each
   included queue wait is observed rather than right-censored.
@@ -123,8 +132,9 @@ exponentially distributed with the configured mean and a 0.01-day minimum.
   are still waiting.
 - Cases resolved + cases unresolved = total cases in the observation period.
 - Average resolution time is arrival to resolution for resolved cases only.
-- SLA compliance is the fraction of resolved cases meeting the configured
-  arrival-to-resolution deadline.
+- SLA compliance (%) = resolved within SLA / (all resolved cases + unresolved
+  cases whose SLA deadline has passed) × 100. Unresolved cases not yet due are
+  excluded; compliance is undefined when the denominator is zero.
 - Utilization is observed investigator busy time / available investigator time.
 
 The random seed controls grievance counts, arrivals, categories, and service

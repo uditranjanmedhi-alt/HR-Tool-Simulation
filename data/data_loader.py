@@ -5,14 +5,35 @@ from __future__ import annotations
 import csv
 from io import BytesIO, StringIO
 from typing import Any
+import zipfile
 
 from openpyxl import load_workbook
+
+MAX_UPLOAD_BYTES = 20 * 1024 * 1024
+MAX_WORKBOOK_UNCOMPRESSED_BYTES = 100 * 1024 * 1024
+MAX_WORKBOOK_ENTRIES = 1000
+
+
+def _validate_content_size(content: bytes) -> None:
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise ValueError("The uploaded file exceeds the 20 MiB size limit.")
+
+
+def _validate_workbook_archive(content: bytes) -> None:
+    with zipfile.ZipFile(BytesIO(content)) as archive:
+        entries = archive.infolist()
+        if len(entries) > MAX_WORKBOOK_ENTRIES:
+            raise ValueError("The workbook contains too many internal files.")
+        if sum(entry.file_size for entry in entries) > MAX_WORKBOOK_UNCOMPRESSED_BYTES:
+            raise ValueError("The workbook expands beyond the 100 MiB processing limit.")
 
 
 def excel_sheet_names(filename: str, content: bytes) -> list[str]:
     """Return worksheet names from an uploaded XLSX file."""
+    _validate_content_size(content)
     if not filename.lower().endswith(".xlsx"):
         raise ValueError("Worksheet selection is available for .xlsx files.")
+    _validate_workbook_archive(content)
     workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
     try:
         return list(workbook.sheetnames)
@@ -26,10 +47,12 @@ def parse_uploaded_file(
     sheet_name: str | None = None,
 ) -> tuple[list[str], list[list[Any]]]:
     """Read CSV or one explicitly selected XLSX sheet into column and row lists."""
+    _validate_content_size(content)
     lower_name = filename.lower()
     if lower_name.endswith(".csv"):
         parsed = list(csv.reader(StringIO(content.decode("utf-8-sig"))))
     elif lower_name.endswith(".xlsx"):
+        _validate_workbook_archive(content)
         workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
         try:
             if sheet_name is None:

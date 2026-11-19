@@ -34,3 +34,22 @@
   Carlo simulation summaries.
 - Added methodology, limitations, data dictionary, audit, and validation
   documentation.
+
+## Final-release hardening
+
+- Made recruitment actual-spend and cost-per-hire units explicit, handled
+  zero-hire cases, and capped interview volume by configured interviewer
+  capacity; retained processing effort as a person-day workload, not elapsed
+  time-to-fill.
+- Scaled Poisson grievance counts by the observation horizon, distinguished
+  fixed uploaded counts, and defined the SLA denominator to include overdue
+  unresolved cases while excluding cases not yet due.
+- Added report-time, simulation-time, seed, provenance, rule-based
+  recommendations, and assumptions to CSV, Excel, and PDF reports; PDF reports
+  also include an outcome chart when series data is available.
+- Added visible module methodology/assumption expanders and explicit currency
+  and time units to monetary KPIs.
+- Hardened upload validation, record-level range and chronology checks,
+  spreadsheet formula-injection handling, and upload/archive size limits.
+- Added formula and dashboard tests for the corrections; final local validation
+  passed 48 tests, `compileall`, and `pip check` on 2026-11-19.

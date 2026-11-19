@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from math import isfinite
 from statistics import median
 from typing import Any
 
@@ -9,7 +10,7 @@ from typing import Any
 DEFAULT_SIMULATION_PARAMS: dict[str, dict[str, int | float | None]] = {
     "Recruitment & Talent Acquisition": {
         "vacancies": 50, "applicants": 500, "recruiters": 3, "interviewers": 5,
-        "screen_capacity": 200, "budget": 75000, "screen_rate": .8,
+        "screen_capacity": 200, "interview_capacity": 50, "budget": 75000, "screen_rate": .8,
         "shortlist_rate": .35, "dropout_rate": .1, "offer_rate": .9,
         "acceptance_rate": .75, "joining_rate": .9, "screen_days": .5,
         "interview_days": 1, "cost_per_applicant": 100,
@@ -78,6 +79,9 @@ def map_uploaded_data(
     }:
         raise ValueError("Choose an explicit invalid-value treatment.")
     invalid_replacements = invalid_replacements or {}
+    for parameter, replacement in invalid_replacements.items():
+        if not isfinite(float(replacement)):
+            raise ValueError(f"Replacement for {parameter} must be finite.")
     if duplicate_treatment not in {"keep duplicates", "exclude duplicate rows"}:
         raise ValueError("Choose an explicit duplicate-row treatment.")
 
@@ -98,7 +102,6 @@ def map_uploaded_data(
             duplicate_rows.add(row_index)
         duplicate_keys.add(key)
 
-    values_by_parameter: dict[str, list[float]] = {parameter: [] for parameter in mappings}
     complete_rows: list[dict[str, float | None]] = []
     missing_cells = invalid_cells = 0
     for row_index, row in enumerate(rows):
@@ -114,16 +117,16 @@ def map_uploaded_data(
             aggregation = aggregations[parameter]
             if aggregation in {"count", "unique count"}:
                 mapped[parameter] = 1.0
-                values_by_parameter[parameter].append(1.0)
                 continue
             try:
+                if isinstance(raw, bool):
+                    raise ValueError
                 numeric_value = float(raw)
             except (TypeError, ValueError):
                 invalid_cells += 1
                 if invalid_treatment == "replace invalid values with explicit number" and parameter in invalid_replacements:
                     numeric_value = float(invalid_replacements[parameter])
                     mapped[parameter] = numeric_value
-                    values_by_parameter[parameter].append(numeric_value)
                 else:
                     mapped[parameter] = None
                     row_invalid = True
@@ -133,13 +136,11 @@ def map_uploaded_data(
                 if invalid_treatment == "replace invalid values with explicit number" and parameter in invalid_replacements:
                     numeric_value = float(invalid_replacements[parameter])
                     mapped[parameter] = numeric_value
-                    values_by_parameter[parameter].append(numeric_value)
                 else:
                     mapped[parameter] = None
                     row_invalid = True
                 continue
             mapped[parameter] = numeric_value
-            values_by_parameter[parameter].append(numeric_value)
         complete_rows.append({
             "row_index": float(row_index),
             "duplicate": 1.0 if row_index in duplicate_rows else 0.0,
@@ -172,6 +173,11 @@ def map_uploaded_data(
 
     params: dict[str, int | float] = dict(defaults)
     applied_mappings: dict[str, dict[str, str]] = {}
+    count_parameters = {
+        "vacancies", "applicants", "recruiters", "interviewers",
+        "screen_capacity", "interview_capacity", "workforce", "employees", "months", "hires",
+        "capacity", "total_grievances",
+    }
     for parameter, column_name in mappings.items():
         aggregation = aggregations[parameter]
         selected: list[float] = []
@@ -183,7 +189,10 @@ def map_uploaded_data(
                     continue
                 if missing_treatment != "median-fill numeric columns":
                     continue
-                available = values_by_parameter[parameter]
+                available = [
+                    float(row[parameter]) for row in retained
+                    if row[parameter] is not None
+                ]
                 if not available:
                     continue
                 value = float(median(available))
@@ -208,9 +217,12 @@ def map_uploaded_data(
         else:
             aggregate = max(selected) if selected else 0.0
         # Count-valued simulation inputs are expected as integers.
-        if parameter in {"vacancies", "applicants", "recruiters", "interviewers",
-                         "screen_capacity", "workforce", "employees", "months", "hires",
-                         "capacity", "total_grievances"}:
+        if parameter in count_parameters:
+            if not float(aggregate).is_integer():
+                raise ValueError(
+                    f"Mapped count input {parameter} aggregated to {aggregate:g}; "
+                    "choose an aggregation that produces a whole number."
+                )
             params[parameter] = int(aggregate)
         else:
             params[parameter] = float(aggregate)

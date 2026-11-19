@@ -18,6 +18,7 @@ from openpyxl.utils.exceptions import InvalidFileException
 
 from config.settings import CHART_COLORS, THEME
 from data.data_loader import excel_sheet_names, parse_uploaded_file
+from data.export_safety import safe_spreadsheet_cell
 from data.record_analysis import RECORD_LEVEL_SCHEMAS, analyze_record_level_data
 from data.synthetic_generator import (
     MODULE_DATASETS,
@@ -228,16 +229,21 @@ def records_to_csv(records: list[dict], columns: list[str] | None = None) -> byt
     headers = columns or (list(records[0]) if records else [])
     output = io.StringIO(newline="")
     writer = csv.DictWriter(output, fieldnames=headers, extrasaction="ignore")
-    writer.writeheader()
-    writer.writerows(records)
+    writer.writerow({header: safe_spreadsheet_cell(header) for header in headers})
+    writer.writerows([
+        {key: safe_spreadsheet_cell(value) for key, value in record.items()}
+        for record in records
+    ])
     return output.getvalue().encode("utf-8")
 
 
 def rows_to_csv(columns: list[str], rows: list[list]) -> bytes:
     output = io.StringIO(newline="")
     writer = csv.writer(output)
-    writer.writerow(columns)
-    writer.writerows(rows)
+    writer.writerow([safe_spreadsheet_cell(value) for value in columns])
+    writer.writerows([
+        [safe_spreadsheet_cell(value) for value in row] for row in rows
+    ])
     return output.getvalue().encode("utf-8")
 
 
@@ -283,8 +289,8 @@ def render_insights(module: str, params: dict, result: dict) -> None:
     insights: list[tuple[str, str]] = []
     if module == "Recruitment & Talent Acquisition":
         attainment = values["Hiring Target Attainment (%)"]
-        cost_per_hire = values["Cost per Hire"]
-        cost_summary = "not defined because no employees joined" if cost_per_hire is None else f"{cost_per_hire:,.2f} per hire"
+        cost_per_hire = values["Cost per Hire (INR/hire)"]
+        cost_summary = "not defined because no employees joined" if cost_per_hire is None else f"INR {cost_per_hire:,.2f} per hire"
         counts = result["series"]
         conversions = [
             (counts[index]["Stage"], counts[index + 1]["Stage"],
@@ -298,11 +304,17 @@ def render_insights(module: str, params: dict, result: dict) -> None:
             ("Bottleneck", f"{bottleneck[0]} → {bottleneck[1]} conversion is "
              f"{bottleneck[2] * 100:.1f}%, the lowest step in this funnel."),
             ("Manager action", "Test screening capacity and per-candidate effort assumptions; processing effort is not elapsed time-to-fill."),
-            ("Spend and unit cost", f"Actual spend is {values['Actual Recruitment Spend']:,.2f}; cost per hire is {cost_summary}. "
-             f"Unused budget is {values['Budget'] - values['Actual Recruitment Spend']:,.2f}."),
+            ("Spend and unit cost",             f"Actual spend is INR {values['Actual Recruitment Spend (INR)']:,.2f}; cost per hire is {cost_summary}. "
+            f"Unused budget is INR {values['Budget (INR)'] - values['Actual Recruitment Spend (INR)']:,.2f}."),
         ]
     elif module == "Employee Attrition & Retention":
         rate = values["Annualized Attrition Rate (%)"]
+        st.caption(
+            "Monthly attrition = total exits ÷ opening-workforce employee-month exposure; "
+            "annualized = 1 − (1 − pooled monthly rate)^12; period attrition = 1 − product of "
+            "(1 − monthly exits ÷ monthly opening workforce); original-cohort retention = "
+            "starting employees still employed ÷ initial workforce."
+        )
         insights = [
             ("What changed", f"Workforce moves from {values['Initial Workforce']} to {values['Final Workforce']} "
              f"over {params['months']} months."),
@@ -311,7 +323,7 @@ def render_insights(module: str, params: dict, result: dict) -> None:
             ("Original cohort", f"{values['Original Cohort Exits']} of {values['Initial Workforce']} starting employees exited; "
              f"{values['Original Cohort Retention (%)']:.1f}% remain. Replacement hires are tracked separately."),
             ("Replacement cost", f"Estimated replacement cost is "
-             f"{values['Estimated Replacement Cost']:,.0f}."),
+             f"INR {values['Estimated Replacement Cost (INR)']:,.0f}."),
             ("Manager action", "Test a lower voluntary-exit assumption alongside replacement hiring and compare final headcount."),
             ("Workforce movement", f"{values['Total Hires']} hires − {values['Total Exits']} exits = "
              f"net change of {values['Net Workforce Change']:+,} employees."),
@@ -345,13 +357,15 @@ def render_insights(module: str, params: dict, result: dict) -> None:
              f"estimated hiring requirement is {values['Hiring Requirement']}."),
             ("Manager action", "Compare recruitment, internal mobility, retention and productivity assumptions."),
             ("Capacity & cost", f"Productivity-adjusted capacity is {values['Effective Capacity (workload units)']:.1f} workload units; "
-             f"cumulative labour cost is {values['Estimated Labour Cost']:,.0f}."),
+             f"cumulative labour cost is INR {values['Estimated Labour Cost (INR over horizon)']:,.0f}."),
         ]
     elif module == "Compensation & Benefits":
         insights = [
-            ("Cost outlook", f"Total simulated compensation is {values['Total Compensation Cost']:,.0f}."),
-            ("Pay movement", f"Increment cost is {values['Increment Cost']:,.0f}; benefits cost is "
-             f"{values['Benefits Cost']:,.0f}."),
+            ("Cost outlook", f"Total simulated compensation is INR "
+             f"{values['Total Compensation Cost (INR/year)']:,.0f} per year."),
+            ("Pay movement", f"Annual increment cost is INR "
+             f"{values['Increment Cost (INR/year)']:,.0f}; annual benefits cost is "
+             f"INR {values['Benefits Cost (INR/year)']:,.0f}."),
             ("Manager action", "Compare total rewards with an appropriate, validated market benchmark."),
             ("Safeguard", "This model does not assess individual pay equity or recommend employee-level compensation decisions."),
         ]
@@ -360,6 +374,8 @@ def render_insights(module: str, params: dict, result: dict) -> None:
         pending_age = values["Average Pending-Case Age (days)"]
         wait_summary = "not observed" if average_wait is None else f"{average_wait:.1f} days"
         age_summary = "not applicable" if pending_age is None else f"{pending_age:.1f} days"
+        sla_compliance = values["SLA Compliance (%)"]
+        sla_summary = "N/A" if sla_compliance is None else f"{sla_compliance:.1f}%"
         insights = [
             ("Case volume", f"{values['Total Grievances']} simulated grievances; "
              f"{values['Cases Resolved']} resolved and {values['Cases Unresolved']} unresolved."),
@@ -368,8 +384,9 @@ def render_insights(module: str, params: dict, result: dict) -> None:
              f"Average pending-case age is {age_summary}."),
             ("Observed waiting", f"Average wait among {values['Cases Started Investigation']} cases that started is "
              f"{wait_summary}; incomplete waiting times are censored separately."),
-            ("Service levels", f"{values['SLA Compliance (%)']:.1f}% of resolved cases met the configured SLA; "
-             f"investigator utilization was {values['Investigator Utilization (%)']:.1f}%."),
+            ("Service levels", f"{sla_summary} SLA compliance across {values['SLA Compliance Denominator']} "
+             f"resolved or overdue cases; {values['Unresolved Past SLA Deadline']} unresolved cases are overdue. "
+             f"Investigator utilization was {values['Investigator Utilization (%)']:.1f}%."),
             ("Manager action", "Review case capacity, observed queues and recurring categories; prioritize fair and timely process."),
             ("Safeguard", "The simulation does not assess individual grievances or automate disciplinary decisions."),
         ]
@@ -415,18 +432,20 @@ def module_parameters(module: str) -> dict:
             with left:
                 vacancies = number("Vacancies", 1, 1000, 50)
                 applicants = number("Applicants", 1, 10000, 500)
-                cost_per_applicant = number("Recruitment cost per candidate", 1.0, 10000.0,
+                cost_per_applicant = number("Recruitment cost per candidate (INR)", 1.0, 10000.0,
                                             100.0, step=25.0)
             with right:
-                budget = number("Recruitment budget", 0.0, 10000000.0, 75000.0, step=5000.0)
+                budget = number("Recruitment budget (INR)", 0.0, 10000000.0, 75000.0, step=5000.0)
         with capacity_tab:
-            left, right, third = st.columns(3)
+            left, right, third, fourth = st.columns(4)
             with left:
                 recruiters = slider("Recruiters", 1, 30, 3)
             with right:
                 interviewers = slider("Interviewers available", 1, 30, 5)
             with third:
-                screen_capacity = number("Screening capacity per recruiter", 1, 5000, 200, step=25)
+                screen_capacity = number("Screening capacity per recruiter (scenario)", 1, 5000, 200, step=25)
+            with fourth:
+                interview_capacity = number("Interview slots per interviewer (scenario)", 0, 5000, 50, step=10)
             left, right = st.columns(2)
             with left:
                     screen_days = slider("Screening effort (person-days per candidate)", 0.1, 5.0, 0.5, 0.1)
@@ -444,7 +463,8 @@ def module_parameters(module: str) -> dict:
                 acceptance_rate = slider("Offer acceptance rate", 0.0, 1.0, 0.75, 0.05)
                 joining_rate = slider("Joining rate after acceptance", 0.0, 1.0, 0.9, 0.05)
         return {"vacancies": vacancies, "applicants": applicants, "recruiters": recruiters,
-                "interviewers": interviewers, "screen_capacity": screen_capacity, "budget": budget,
+                "interviewers": interviewers, "screen_capacity": screen_capacity,
+                "interview_capacity": interview_capacity, "budget": budget,
                 "screen_rate": screen_rate, "shortlist_rate": shortlist_rate,
                 "dropout_rate": dropout_rate, "offer_rate": offer_rate,
                 "acceptance_rate": acceptance_rate, "joining_rate": joining_rate,
@@ -461,7 +481,7 @@ def module_parameters(module: str) -> dict:
             voluntary = slider("Monthly voluntary exit probability", 0.0, 0.2, 0.02, 0.005)
             involuntary = slider("Monthly involuntary exit probability", 0.0, 0.1, 0.005, 0.001)
             retirement = slider("Monthly retirement probability", 0.0, 0.1, 0.002, 0.001)
-            replacement_cost = number("Estimated replacement cost per exit", 0.0, 1000000.0, 12000.0, step=1000.0)
+            replacement_cost = number("Estimated replacement cost per exit (INR)", 0.0, 1000000.0, 12000.0, step=1000.0)
         return {"workforce": workforce, "months": months, "voluntary": voluntary,
                 "involuntary": involuntary, "retirement": retirement, "hires": hires,
                 "replacement_cost": replacement_cost}
@@ -473,8 +493,8 @@ def module_parameters(module: str) -> dict:
             eligibility_rate = slider("Training eligibility rate", 0.0, 1.0, 1.0, 0.05)
             left, right = st.columns(2)
             with left:
-                budget = number("Training budget", 0.0, 100000000.0, 50000.0, step=5000.0)
-                cost_per_person = number("Training cost per enrollee", 0.0, 100000.0, 500.0, step=100.0)
+                budget = number("Training budget (INR)", 0.0, 100000000.0, 50000.0, step=5000.0)
+                cost_per_person = number("Training cost per enrollee (INR)", 0.0, 100000.0, 500.0, step=100.0)
             with right:
                 participation = slider("Participation rate", 0.0, 1.0, 0.7, 0.05)
                 completion = slider("Completion rate", 0.0, 1.0, 0.82, 0.05)
@@ -485,7 +505,7 @@ def module_parameters(module: str) -> dict:
                 learning_gain = slider("Average learning gain (points)", 0.0, 5.0, 1.2, 0.1)
                 pre_training_score = slider("Average pre-training score (0–100)", 0.0, 100.0, 60.0, 1.0)
             with right:
-                value_per_gain = number("Estimated value per gain point", 0.0, 100000.0, 150.0, step=25.0)
+                value_per_gain = number("Assumed value per gain point (INR)", 0.0, 100000.0, 150.0, step=25.0)
         return {"employees": employees, "budget": budget, "cost_per_person": cost_per_person,
                 "eligibility_rate": eligibility_rate, "participation": participation,
                 "completion": completion, "pass_rate": pass_rate, "learning_gain": learning_gain,
@@ -499,7 +519,7 @@ def module_parameters(module: str) -> dict:
             rating_spread = slider("Rating variation", 0.1, 2.0, 0.8, 0.1)
         with intervention:
             training_effect = slider("Training intervention (estimated points)", 0.0, 2.0, 0.2, 0.1)
-            reward_budget = number("Reward budget", 0.0, 100000000.0, 50000.0, step=5000.0)
+            reward_budget = number("Reward budget (INR)", 0.0, 100000000.0, 50000.0, step=5000.0)
         return {"employees": employees, "mean_rating": mean_rating, "rating_spread": rating_spread,
                 "training_effect": training_effect, "reward_budget": reward_budget}
 
@@ -513,7 +533,7 @@ def module_parameters(module: str) -> dict:
             turnover = slider("Monthly supply attrition", 0.0, 0.2, 0.015, 0.005)
         with cost_tab:
             productivity = slider("Productivity index", 0.1, 2.0, 1.0, 0.05)
-            monthly_cost = number("Monthly labour cost per employee", 0.0, 1000000.0, 5000.0, step=500.0)
+            monthly_cost = number("Monthly labour cost per employee (INR)", 0.0, 1000000.0, 5000.0, step=500.0)
         return {"workforce": workforce, "demand": demand, "months": months, "growth": growth,
                 "turnover": turnover, "productivity": productivity, "monthly_cost": monthly_cost}
 
@@ -521,8 +541,8 @@ def module_parameters(module: str) -> dict:
         pay, rewards = st.tabs(["Pay structure", "Rewards & benefits"])
         with pay:
             employees = number("Employees in scope", 1, 100000, 500)
-            salary = number("Average annual base salary", 10000.0, 1000000.0, 60000.0, step=5000.0)
-            spread = slider("Salary variation (standard deviation)", 1000, 200000, 15000, 1000)
+            salary = number("Average annual base salary (INR/year)", 10000.0, 1000000.0, 60000.0, step=5000.0)
+            spread = slider("Annual salary variation (INR/year, standard deviation)", 1000, 200000, 15000, 1000)
         with rewards:
             increment = slider("Annual salary increment", 0.0, 0.3, 0.04, 0.01)
             bonus = slider("Bonus as share of salary", 0.0, 0.5, 0.05, 0.01)
@@ -608,6 +628,12 @@ def render_module(module: str) -> None:
         '<span class="status-pill">⌂ LOCAL SESSION</span></div>',
         unsafe_allow_html=True,
     )
+    if module in {
+        "Recruitment & Talent Acquisition", "Employee Attrition & Retention",
+        "Learning & Development", "Performance Management", "Workforce Planning",
+        "Compensation & Benefits",
+    }:
+        st.caption("Monetary inputs and outputs use Indian rupees (INR, ₹). Salary and payroll figures are annual.")
     with st.container(border=True):
         st.markdown("#### Simulation controls")
         st.caption(descriptions[module][1])
@@ -625,7 +651,7 @@ def render_module(module: str) -> None:
                 {"KPI": "Expected hires", "Value": values["Employees Joined"]},
                 {"KPI": "Recruitment processing effort (person-days)",
                  "Value": values["Estimated Recruitment Processing Effort (person-days)"]},
-                {"KPI": "Cost per hire", "Value": values["Cost per Hire"]},
+                {"KPI": "Cost per hire (INR/hire)", "Value": values["Cost per Hire (INR/hire)"]},
                 {"KPI": "Selection ratio", "Value": f"{values['Recruitment Conversion (%)']:.1f}%"},
             ]
             show_kpis(recruitment_cards, per_row=3)
@@ -635,17 +661,21 @@ def render_module(module: str) -> None:
                                                      "Annualized Attrition Rate (%)", "Period Workforce Attrition (%)",
                                                      "Original Cohort Exits", "Original Cohort Retention (%)"],
                 "Learning & Development": ["Enrolled", "Training Completion Rate (%)",
-                                           "Estimated Training ROI (%)", "Estimated Financial Benefit (assumption-based)"],
+                                           "Estimated Training ROI (%)", "Estimated Financial Benefit (INR, assumption-based)"],
                 "Performance Management": ["Average Performance Score After Intervention",
                                           "Goal Achievement Rate (%)", "High Performer Share (%)",
                                           "Employees Requiring Support (%)"],
                 "Workforce Planning": ["Forecast Workforce Supply", "Required FTE",
                                        "Workforce Gap", "Hiring Requirement"],
-                "Compensation & Benefits": ["Average Salary", "Total Compensation Cost",
-                                            "Increment Cost", "Benefits Cost"],
+                "Compensation & Benefits": ["Average Salary (INR/year)",
+                                            "Total Compensation Cost (INR/year)",
+                                            "Increment Cost (INR/year)", "Benefits Cost (INR/year)"],
                 "Employee Relations": ["Total Grievances", "Cases Resolved", "Cases Unresolved",
                                        "Cases Waiting at Period End",
-                                       "Average Waiting Time for Started Cases (days)"],
+                                       "Average Waiting Time for Started Cases (days)",
+                                       "Resolved Within SLA", "Resolved Outside SLA",
+                                       "Unresolved Past SLA Deadline", "Unresolved Before SLA Deadline",
+                                       "SLA Compliance (%)"],
             }[module]
             values = kpi_values(preview)
             show_kpis([{"KPI": key, "Value": values[key]} for key in highlights])
@@ -734,10 +764,13 @@ def render_module(module: str) -> None:
                 ))
                 hiring_fig.update_layout(title="Hiring outcomes", yaxis_title="Candidates")
                 st.plotly_chart(styled_chart(hiring_fig), width="stretch")
+            cost_per_hire = values["Cost per Hire (INR/hire)"]
             costs = [
-                {"KPI": "Recruitment budget", "Value": f"{params['budget']:,.2f}"},
-                {"KPI": "Cost per hire", "Value": f"{values['Cost per Hire']:,.2f}"},
+                {"KPI": "Recruitment budget (INR)", "Value": f"₹{params['budget']:,.2f}"},
+                {"KPI": "Cost per hire (INR/hire)",
+                 "Value": "N/A" if cost_per_hire is None else f"₹{cost_per_hire:,.2f}"},
                 {"KPI": "Screening capacity", "Value": f"{params['screen_capacity'] * params['recruiters']:,}"},
+                {"KPI": "Interview capacity", "Value": f"{params['interview_capacity'] * params['interviewers']:,}"},
                 {"KPI": "Applicants / recruiter", "Value": f"{workload:,.1f}"},
             ]
             render_table(["Cost & capacity measure", "Value"], [[row["KPI"], row["Value"]] for row in costs])
@@ -764,6 +797,11 @@ def render_module(module: str) -> None:
                 render_table(["KPI", "Value"], [[row["KPI"], row["Value"]] for row in preview["kpis"]])
         with insight_tab:
             render_insights(module, params, preview)
+    with st.expander("Methodology, assumptions & limitations"):
+        st.caption(f"Objective: {descriptions[module][0]}")
+        render_table(["Input assumption", "Current value"], [[key, value] for key, value in params.items()])
+        for note in preview["notes"]:
+            st.markdown(f"- {note}")
     st.download_button("Download module results (CSV)", records_to_csv(preview["kpis"]),
                        file_name=f"{MODULES[module]}_results.csv", mime="text/csv")
     with st.expander("Uncertainty and sensitivity analysis"):
@@ -888,7 +926,8 @@ def render_home() -> None:
     }, 42)
     recruitment_demo = run_simulation("Recruitment & Talent Acquisition", {
         "vacancies": 50, "applicants": 250, "recruiters": 6, "interviewers": 10,
-        "screen_capacity": 250, "budget": 75000, "screen_rate": .8, "shortlist_rate": .35,
+        "screen_capacity": 250, "interview_capacity": 50, "budget": 75000,
+        "screen_rate": .8, "shortlist_rate": .35,
         "dropout_rate": .1, "offer_rate": .9, "acceptance_rate": .75, "joining_rate": .9,
         "screen_days": .5, "interview_days": 1,
     }, 42)
@@ -961,7 +1000,7 @@ def render_home() -> None:
     if activity:
         rows = [[item["timestamp"], item["module"], item["seed"],
                  next((row["Value"] for row in item["kpis"] if row["KPI"] in
-                       ("Employees Joined", "Final Workforce", "Total Compensation Cost",
+                       ("Employees Joined", "Final Workforce", "Total Compensation Cost (INR/year)",
                         "Training Completion Rate (%)", "Cases Unresolved")), "—")]
                 for item in activity[:6]]
         render_table(["Run time", "Module", "Seed", "Headline outcome"], rows)
@@ -1161,9 +1200,23 @@ def render_record_level_analysis(module: str, headers: list[str], rows: list[lis
 
     st.write(
         f"Analyzed **{analysis['retained_records']:,} / {analysis['input_records']:,}** records; "
-        f"excluded **{analysis['excluded_duplicate_records']:,}** duplicates. "
+        f"excluded **{analysis['excluded_duplicate_records']:,}** exact duplicates and "
+        f"**{analysis['excluded_duplicate_employee_records']:,}** ambiguous employee records. "
         f"Mode: **{analysis['mode']}**."
     )
+    st.markdown("**Data-quality summary**")
+    quality_rows = [[check, count] for check, count in analysis["data_quality"].items()]
+    render_table(["Check", "Issue count"], quality_rows)
+    if any(analysis["data_quality"].values()):
+        st.warning(
+            "Review these data-quality issues before interpreting the descriptive results. "
+            "Out-of-range or missing numeric values are excluded from the affected measure."
+        )
+    if module == "Compensation & Benefits":
+        st.caption(
+            "Uploaded compensation values are assumed to be INR and to use a consistent pay period; "
+            "the analysis does not convert currency or annualize salary."
+        )
     render_table(
         ["Measure", "Records with value", "Mean", "Median", "Standard deviation", "Minimum", "Maximum"],
         [[row.get(key) for key in (
@@ -1174,6 +1227,11 @@ def render_record_level_analysis(module: str, headers: list[str], rows: list[lis
         render_table(
             ["Measure", "Missing or invalid values excluded"],
             [[measure, count] for measure, count in analysis["invalid_or_missing_numeric_values"].items()],
+        )
+    if analysis["out_of_range_numeric_values"]:
+        render_table(
+            ["Measure", "Out-of-range values excluded"],
+            [[measure, count] for measure, count in analysis["out_of_range_numeric_values"].items()],
         )
     if analysis["distributions"]:
         measure = st.selectbox(
@@ -1475,6 +1533,32 @@ def render_data_management() -> None:
                 st.success("Uploaded-data result saved for comparison.")
 
 
+def recommendation_items(module: str, values: dict) -> list[str]:
+    advice = []
+    if module == "Employee Attrition & Retention" and values.get("Annualized Attrition Rate (%)", 0) > 15:
+        advice.append("Review workload, engagement, career growth and compensation; annualized attrition exceeds the illustrative 15% threshold.")
+    if module == "Recruitment & Talent Acquisition":
+        funded = values["Candidates Within Recruitment Budget"]
+        if funded < values["Applicants"]:
+            advice.append(
+                f"The budget funds {funded} of {values['Applicants']} applicants; review the budget "
+                "and cost-per-applicant assumption before interpreting funnel outcomes."
+            )
+        if values["Cost per Hire (INR/hire)"] is None:
+            advice.append("Cost per hire is undefined because no employees joined; actual spend is still reported.")
+    if module == "Learning & Development" and values.get("Training Completion Rate (%)", 0) < 70:
+        advice.append("Investigate scheduling, relevance and manager support; simulated completion is below 70%.")
+    if module == "Workforce Planning" and values.get("Workforce Gap", 0) > 0:
+        advice.append(f"Forecast available FTE is below required FTE by {values['Workforce Gap']:.1f}; assess hiring, internal mobility and productivity.")
+    if module == "Employee Relations" and values.get("Cases Unresolved", 0) > 0:
+        advice.append("Review case capacity and resolution processes; distinguish cases still waiting from those already under investigation.")
+    if module == "Compensation & Benefits":
+        advice.append("Compare simulated total compensation against a validated market benchmark before making budget decisions.")
+    if module == "Performance Management":
+        advice.append("Use results to plan coaching and development; never treat simulated ratings as individual employee facts.")
+    return advice or ["No threshold-based alert for this illustrative result. Review assumptions and context."]
+
+
 def render_recommendations() -> None:
     st.title("AI Recommendations")
     st.caption("Offline rule-based recommendations with an explanation. No external AI or employee-level risk scoring.")
@@ -1482,31 +1566,50 @@ def render_recommendations() -> None:
         st.info("Run a module simulation to receive recommendations based on its outputs.")
         return
     for module, result in st.session_state.latest_results.items():
-        values = {row["KPI"]: row["Value"] for row in result["kpis"]}
         st.subheader(module)
-        advice = []
-        if module == "Employee Attrition & Retention" and values.get("Annualized Attrition Rate (%)", 0) > 15:
-            advice.append("Review workload, engagement, career growth and compensation; annualized attrition exceeds the illustrative 15% threshold.")
-        if module == "Recruitment & Talent Acquisition":
-            funded = values["Candidates Within Recruitment Budget"]
-            if funded < values["Applicants"]:
-                advice.append(
-                    f"The budget funds {funded} of {values['Applicants']} applicants; review the budget "
-                    "and cost-per-applicant assumption before interpreting funnel outcomes."
-                )
-            if values["Cost per Hire"] is None:
-                advice.append("Cost per hire is undefined because no employees joined; actual spend is still reported.")
-        if module == "Learning & Development" and values.get("Training Completion Rate (%)", 0) < 70:
-            advice.append("Investigate scheduling, relevance and manager support; simulated completion is below 70%.")
-        if module == "Workforce Planning" and values.get("Workforce Gap", 0) > 0:
-            advice.append(f"Forecast available FTE is below required FTE by {values['Workforce Gap']:.1f}; assess hiring, internal mobility and productivity.")
-        if module == "Employee Relations" and values.get("Cases Unresolved", 0) > 0:
-            advice.append("Review case capacity and resolution processes; distinguish cases still waiting from those already under investigation.")
-        if module == "Compensation & Benefits":
-            advice.append("Compare simulated total compensation against a validated market benchmark before making budget decisions.")
-        if module == "Performance Management":
-            advice.append("Use results to plan coaching and development; never treat simulated ratings as individual employee facts.")
-        st.write("\n".join(f"- {item}" for item in advice) if advice else "No threshold-based alert for this illustrative result. Review assumptions and context.")
+        advice = recommendation_items(module, kpi_values(result))
+        st.write("\n".join(f"- {item}" for item in advice))
+
+
+def report_chart_data(report: dict) -> tuple[str, list[str], list[float]] | None:
+    module = report["module"]
+    series = report.get("series", [])
+    if module == "Compensation & Benefits":
+        salaries = [
+            float(row["Salary"]) for row in series
+            if isinstance(row.get("Salary"), (int, float, np.number))
+            and np.isfinite(float(row["Salary"]))
+        ]
+        if not salaries:
+            return None
+        counts, edges = np.histogram(salaries, bins=min(10, max(1, len(set(salaries)))))
+        labels = [f"{edges[index]:,.0f}–{edges[index + 1]:,.0f}" for index in range(len(counts))]
+        return "Annual salary distribution (INR/year)", labels, [float(value) for value in counts]
+
+    chart_fields = {
+        "Recruitment & Talent Acquisition": ("Recruitment funnel", "Stage", "Count"),
+        "Employee Attrition & Retention": ("Monthly exits", "Month", "Exits"),
+        "Learning & Development": ("Training outcomes", "Stage", "Employees"),
+        "Performance Management": ("Performance rating distribution", "Rating", "Employees"),
+        "Workforce Planning": ("Forecast required FTE", "Month", "Required FTE"),
+        "Employee Relations": ("Grievance categories", "Category", "Grievances"),
+    }
+    spec = chart_fields.get(module)
+    if spec is None:
+        return None
+    title, label_key, value_key = spec
+    valid_rows = [
+        row for row in series
+        if isinstance(row.get(value_key), (int, float, np.number))
+        and np.isfinite(float(row[value_key]))
+    ]
+    if not valid_rows:
+        return None
+    return (
+        title,
+        [str(row[label_key]) for row in valid_rows],
+        [float(row[value_key]) for row in valid_rows],
+    )
 
 
 def render_reports() -> None:
@@ -1518,20 +1621,44 @@ def render_reports() -> None:
     options = [f"{r['module']} — {r['timestamp']}" for r in results]
     selected_index = options.index(st.selectbox("Select a simulation", options))
     report = results[selected_index]
+    report_generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
     st.subheader(report["module"])
     st.write(f"Simulation time: {report['timestamp']} · Random seed: {report['seed']}")
+    st.write(f"Report generated: {report_generated_at}")
     provenance = report.get("provenance", scenario_provenance(report["module"], report["params"], report["seed"]))
+    provenance = {
+        **provenance,
+        "simulation_timestamp": report["timestamp"],
+        "report_generated_at": report_generated_at,
+        "random_seed": report["seed"],
+    }
     st.write(
         f"Dataset: {provenance['dataset_source']} · {provenance['dataset_name']} · "
         f"{provenance['record_count']:,} records; {provenance['excluded_records']:,} excluded."
     )
     st.write("Objective: explore the effect of configurable HR assumptions using an illustrative simulation.")
     render_table(["KPI", "Value"], [[row["KPI"], row["Value"]] for row in report["kpis"]])
+    recommendations = recommendation_items(report["module"], kpi_values(report))
+    st.subheader("Recommendations")
+    for recommendation in recommendations:
+        st.markdown(f"- {recommendation}")
     if report.get("notes"):
         st.subheader("Assumptions and limitations")
         for note in report["notes"]:
             st.markdown(f"- {note}")
-    csv_bytes = records_to_csv(report["kpis"])
+    csv_report_rows = [
+        {"KPI": "Simulation time", "Value": report["timestamp"]},
+        {"KPI": "Report generated", "Value": report_generated_at},
+        {"KPI": "Random seed", "Value": report["seed"]},
+        {"KPI": "Dataset source", "Value": provenance["dataset_source"]},
+        {"KPI": "Dataset name", "Value": provenance["dataset_name"]},
+        {"KPI": "Records retained", "Value": provenance["record_count"]},
+        {"KPI": "Records excluded", "Value": provenance["excluded_records"]},
+        *report["kpis"],
+        *({"KPI": "Recommendation", "Value": item} for item in recommendations),
+        *({"KPI": "Assumption / limitation", "Value": note} for note in report.get("notes", [])),
+    ]
+    csv_bytes = records_to_csv(csv_report_rows)
     st.download_button("Download KPI report (CSV)", csv_bytes, "hr_simulation_report.csv", "text/csv")
     excel = BytesIO()
     workbook = Workbook()
@@ -1539,26 +1666,44 @@ def render_reports() -> None:
     kpi_sheet.title = "KPIs"
     kpi_sheet.append(["KPI", "Value"])
     for row in report["kpis"]:
-        kpi_sheet.append([row["KPI"], row["Value"]])
+        kpi_sheet.append([safe_spreadsheet_cell(row["KPI"]), safe_spreadsheet_cell(row["Value"])])
     series_sheet = workbook.create_sheet("Simulation Data")
     series = report["series"]
     series_columns = list(series[0]) if series else []
     if series_columns:
-        series_sheet.append(series_columns)
+        series_sheet.append([safe_spreadsheet_cell(value) for value in series_columns])
         for row in series:
-            series_sheet.append([row.get(column) for column in series_columns])
+            series_sheet.append([
+                safe_spreadsheet_cell(row.get(column)) for column in series_columns
+            ])
     inputs_sheet = workbook.create_sheet("Inputs")
     inputs_sheet.append(["Input", "Value"])
     for key, value in report["params"].items():
-        inputs_sheet.append([key, value])
+        inputs_sheet.append([safe_spreadsheet_cell(key), safe_spreadsheet_cell(value)])
     assumptions_sheet = workbook.create_sheet("Assumptions")
     assumptions_sheet.append(["Assumption / limitation"])
     for note in report.get("notes", []):
-        assumptions_sheet.append([note])
+        assumptions_sheet.append([safe_spreadsheet_cell(note)])
     provenance_sheet = workbook.create_sheet("Data Provenance")
     provenance_sheet.append(["Field", "Value"])
     for key, value in provenance.items():
-        provenance_sheet.append([key, str(value)])
+        provenance_sheet.append([safe_spreadsheet_cell(key), safe_spreadsheet_cell(str(value))])
+    recommendations_sheet = workbook.create_sheet("Recommendations")
+    recommendations_sheet.append(["Rules-based recommendation"])
+    for recommendation in recommendations:
+        recommendations_sheet.append([safe_spreadsheet_cell(recommendation)])
+    from openpyxl.styles import Alignment, Font, PatternFill
+    for worksheet in workbook.worksheets:
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = worksheet.dimensions
+        for cell in worksheet[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill(fill_type="solid", fgColor="17365D")
+            cell.alignment = Alignment(wrap_text=True, vertical="top")
+        for column_cells in worksheet.columns:
+            column_letter = column_cells[0].column_letter
+            width = max((len(str(cell.value or "")) for cell in column_cells), default=12)
+            worksheet.column_dimensions[column_letter].width = min(max(width + 2, 12), 60)
     workbook.save(excel)
     st.download_button("Download report (Excel)", excel.getvalue(), "hr_simulation_report.xlsx",
                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -1567,6 +1712,8 @@ def render_reports() -> None:
         from reportlab.lib.pagesizes import letter
         from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
         from reportlab.lib.styles import getSampleStyleSheet
+        from reportlab.graphics.charts.barcharts import VerticalBarChart
+        from reportlab.graphics.shapes import Drawing
 
         pdf_buffer = BytesIO()
         document = SimpleDocTemplate(pdf_buffer, pagesize=letter)
@@ -1585,6 +1732,8 @@ def render_reports() -> None:
                                     [colors.HexColor("#EFF6FF"), colors.HexColor("#FFFFFF")])]))
         report_content = [Paragraph("HR SIMULATE — Simulation Report", styles["Title"]),
                           Paragraph(f"{html.escape(report['module'])} · {html.escape(report['timestamp'])}", styles["Normal"]),
+                          Paragraph(f"Report generated: {html.escape(report_generated_at)} · Seed: {report['seed']}",
+                                    styles["BodyText"]),
                           Paragraph(f"Dataset: {html.escape(str(provenance['dataset_source']))} · "
                                     f"{html.escape(str(provenance['dataset_name']))} · "
                                     f"{provenance['record_count']} retained, {provenance['excluded_records']} excluded",
@@ -1592,7 +1741,33 @@ def render_reports() -> None:
                           Spacer(1, 14), Paragraph("Inputs", styles["Heading2"]),
                           Paragraph(html.escape(str(report["params"])), styles["BodyText"]),
                           Spacer(1, 14), Paragraph("Key outcomes", styles["Heading2"]), table,
-                          Spacer(1, 14), Paragraph("Assumptions and interpretation", styles["Heading2"])]
+                          Spacer(1, 14)]
+        chart_spec = report_chart_data(report)
+        if chart_spec is not None:
+            chart_title, chart_labels, chart_values = chart_spec
+            drawing = Drawing(460, 220)
+            chart = VerticalBarChart()
+            chart.x, chart.y, chart.width, chart.height = 45, 70, 395, 130
+            chart.data = [chart_values]
+            chart.categoryAxis.categoryNames = chart_labels
+            chart.categoryAxis.labels.fontSize = 7
+            chart.categoryAxis.labels.angle = -30
+            chart.valueAxis.labels.fontSize = 7
+            chart.valueAxis.valueMin = 0
+            chart.valueAxis.valueMax = max(1, max(chart_values) * 1.15)
+            chart.bars[0].fillColor = colors.HexColor("#2563EB")
+            drawing.add(chart)
+            report_content.extend([
+                Paragraph("Illustrative outcome chart", styles["Heading2"]),
+                Paragraph(html.escape(chart_title), styles["BodyText"]),
+                drawing,
+            ])
+        report_content.extend([
+            Spacer(1, 14), Paragraph("Recommendations (rules-based)", styles["Heading2"]),
+        ])
+        for recommendation in recommendations:
+            report_content.append(Paragraph(f"- {html.escape(recommendation)}", styles["BodyText"]))
+        report_content.append(Paragraph("Assumptions and interpretation", styles["Heading2"]))
         for note in report.get("notes", []):
             report_content.append(Paragraph(html.escape(note), styles["BodyText"]))
         report_content.append(Spacer(1, 14))
@@ -1624,7 +1799,7 @@ def render_documentation() -> None:
         - **Performance:** baseline ratings are normal draws clipped to 1–5, which changes the realized mean and adds boundary mass. A fixed assumed point effect is added to each draw and clipped again. The full reward budget is split equally across ratings of 4 or higher; no rewards are allocated if there are no qualifying ratings. These are assumptions, not causal estimates. Record-level mode can optionally compare matched employee ratings across periods and report group differences in mean change descriptively.
         - **Workforce planning:** workload and supply are forecast monthly. Required FTE = workload / productivity index; effective capacity = available FTE × productivity index. Gap = required FTE − available FTE. Labour cost sums each month’s workforce supply × monthly cost.
         - **Compensation:** salaries are sampled from a normal distribution, clipped to 20,000–300,000 in the same currency units as the salary input. Increment, bonus and benefits are percentages of base salary.
-        - **Employee relations:** grievance arrivals use a Poisson model over the observation period. Cases join a FIFO SimPy queue with parallel investigators and exponentially distributed service times. Average waiting uses only cases that started investigation. Unresolved cases, cases still waiting, cases in service, pending-case age, and censored waiting time are reported separately; SLA compliance uses resolved cases only.
+        - **Employee relations:** absent an explicit count, grievance volume is Poisson with expected count = employees × monthly grievance rate × observation days / 30; conditional arrival times are uniform over the observation period. An explicitly supplied count is fixed, with uniform arrival times. Cases join a FIFO SimPy queue with parallel investigators and exponentially distributed service times. Average waiting uses only cases that started investigation. Unresolved cases, cases still waiting, cases in service, pending-case age, and censored waiting time are reported separately. SLA compliance = resolved within SLA ÷ (all resolved cases + unresolved cases whose SLA deadline has passed); unresolved cases not yet due are excluded.
 
         **Data:** Synthetic records are reproducible for a fixed seed and labelled synthetic. Aggregate Parameter Mode maps uploaded columns to scalar model inputs. Record-Level Analysis Mode preserves supported employee, training, performance, compensation, and attrition records for descriptive distributions; modules without required fields remain unavailable in that mode. Performance period and group comparisons are descriptive, not causal.
 

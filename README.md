@@ -46,6 +46,9 @@ the existing legacy module files, but is not imported by the main dashboard.
 - Record-level compensation, attrition, performance, and training summaries, with optional matched performance period/group comparisons where required fields are present.
 - Confirmed aggregate simulations with mapping, cleaning, and provenance; record-level comparisons are clearly descriptive, not causal.
 - Offline rule-based recommendations and CSV, Excel, and PDF result exports.
+- Module-level methodology and assumptions expanders; reports include scenario
+  provenance, generation time, recommendations, assumptions, and an
+  illustrative outcome chart where series data is available.
 - Synthetic dashboard indicators are labelled illustrative.
 
 All calculations use the entered assumptions and a recorded random seed. Uploaded

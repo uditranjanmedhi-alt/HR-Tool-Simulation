@@ -51,7 +51,47 @@ NUMERIC_COLUMNS = {
     "compensation_records": {"base_salary", "allowances", "variable_pay", "benefits"},
 }
 
+VALUE_RANGES = {
+    "employees": {
+        "salary": (0, None), "experience_years": (0, None),
+        "performance_score": (1, 5),
+    },
+    "attrition_records": {"tenure_months": (0, None)},
+    "candidates": {"years_experience": (0, None)},
+    "training_records": {
+        "pre_training_score": (0, 100), "post_training_score": (0, 100),
+    },
+    "performance_records": {
+        "performance_rating": (1, 5), "goal_achievement": (0, 1),
+    },
+    "workforce_records": {
+        "workforce_supply": (0, None), "workforce_demand": (0, None),
+        "productivity_index": (0.000001, None), "fte_requirement": (0, None),
+    },
+    "compensation_records": {
+        "base_salary": (0, None), "allowances": (0, None),
+        "variable_pay": (0, None), "benefits": (0, None),
+    },
+}
+
+DATE_COLUMNS = {
+    "employees": {"hire_date"},
+    "attrition_records": {"hire_date", "exit_date"},
+    "candidates": {"application_date"},
+    "training_records": {"enrolment_date"},
+    "grievance_records": {"date_raised", "investigation_start_date", "resolution_date"},
+}
+
+DATE_ORDERING = {
+    "attrition_records": (("hire_date", "exit_date"),),
+    "grievance_records": (
+        ("date_raised", "investigation_start_date"),
+        ("investigation_start_date", "resolution_date"),
+    ),
+}
+
 NULLABLE_COLUMNS = {
     "attrition_records": {"exit_date", "exit_category"},
     "training_records": {"enrolment_date", "assessment_pass", "post_training_score"},
+    "grievance_records": {"investigation_start_date", "resolution_date"},
 }

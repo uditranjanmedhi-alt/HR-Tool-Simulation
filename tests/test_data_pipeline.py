@@ -1,6 +1,7 @@
 import csv
 import unittest
 from io import BytesIO, StringIO
+from unittest.mock import patch
 
 from data.synthetic_generator import (
     MODULE_DATASETS,
@@ -8,7 +9,9 @@ from data.synthetic_generator import (
     records_to_csv,
     records_to_xlsx,
 )
+from data.data_loader import parse_uploaded_file
 from data.data_validator import validate_dataframe
+from data.export_safety import safe_spreadsheet_cell
 from data.record_analysis import analyze_record_level_data
 from data.upload_pipeline import DEFAULT_SIMULATION_PARAMS, map_uploaded_data
 
@@ -49,6 +52,67 @@ class UploadedDataMappingTests(unittest.TestCase):
         ])
         self.assertEqual(report["duplicate_ids"], 1)
         self.assertEqual(report["invalid_numeric_values"]["salary"], 1)
+
+    def test_schema_validator_checks_ranges_and_date_ordering(self):
+        report = validate_dataframe([{
+            "employee_id": "E1", "hire_date": "2025-03-01", "exit_date": "2025-02-01",
+            "exit_category": "Voluntary", "department": "HR", "tenure_months": -3,
+            "employment_status": "Exited",
+        }], "attrition_records")
+        self.assertFalse(report["valid"])
+        self.assertEqual(report["out_of_range_values"]["tenure_months"], 1)
+        self.assertEqual(report["chronology_errors"]["exit_date before hire_date"], 1)
+
+    def test_mapped_median_uses_only_retained_rows_and_count_inputs_are_whole(self):
+        params, _, _ = map_uploaded_data(
+            ["employee_id", "rating"],
+            [["E1", None], ["E1", 10], ["E1", 10], ["E2", 20]],
+            {"employees": "employee_id", "mean_rating": "rating"},
+            {"employees": "count", "mean_rating": "mean"},
+            DEFAULT_SIMULATION_PARAMS["Performance Management"],
+            missing_treatment="median-fill numeric columns",
+            invalid_treatment="stop if invalid values exist",
+            duplicate_treatment="exclude duplicate rows",
+            random_seed=2,
+            dataset_name="median.csv",
+        )
+        self.assertEqual(params["mean_rating"], 15)
+        with self.assertRaisesRegex(ValueError, "whole number"):
+            map_uploaded_data(
+                ["employees"], [[1], [2]],
+                {"employees": "employees"}, {"employees": "mean"},
+                DEFAULT_SIMULATION_PARAMS["Performance Management"],
+                missing_treatment="exclude affected rows",
+                invalid_treatment="stop if invalid values exist",
+                duplicate_treatment="keep duplicates",
+                random_seed=2,
+                dataset_name="fractional-count.csv",
+            )
+
+    def test_replacements_must_be_finite(self):
+        with self.assertRaisesRegex(ValueError, "must be finite"):
+            map_uploaded_data(
+                ["employees"], [["bad"]],
+                {"employees": "employees"}, {"employees": "count"},
+                DEFAULT_SIMULATION_PARAMS["Performance Management"],
+                missing_treatment="exclude affected rows",
+                invalid_treatment="replace invalid values with explicit number",
+                invalid_replacements={"employees": float("inf")},
+                duplicate_treatment="keep duplicates",
+                random_seed=2,
+                dataset_name="invalid-replacement.csv",
+            )
+
+    def test_upload_size_limit_is_enforced_by_parser(self):
+        with patch("data.data_loader.MAX_UPLOAD_BYTES", 2):
+            with self.assertRaisesRegex(ValueError, "20 MiB"):
+                parse_uploaded_file("data.csv", b"a,b\n")
+
+    def test_formula_like_text_is_neutralized_but_numeric_text_is_preserved(self):
+        self.assertEqual(safe_spreadsheet_cell("=HYPERLINK(\"https://example.test\")"),
+                         "'=HYPERLINK(\"https://example.test\")")
+        self.assertEqual(safe_spreadsheet_cell(" -12.5"), " -12.5")
+        self.assertEqual(safe_spreadsheet_cell(12.5), 12.5)
 
     def test_column_mapping_aggregates_only_after_explicit_cleaning_choices(self):
         columns = ["employee_id", "salary", "rating"]
@@ -217,6 +281,39 @@ class RecordLevelAnalysisTests(unittest.TestCase):
         self.assertEqual(result["duplicate_records"], 1)
         self.assertEqual(result["retained_records"], 2)
         self.assertEqual(result["excluded_duplicate_records"], 1)
+
+    def test_record_level_analysis_excludes_duplicate_employees_and_invalid_ranges(self):
+        columns = ["employee_id", "department", "base_salary", "allowances", "variable_pay", "benefits"]
+        rows = [
+            ["E1", "HR", 100, 10, 0, 0],
+            ["E1", "HR", 200, 10, 0, 0],
+            ["E2", "Finance", -5, 0, 0, 0],
+            ["E3", "Sales", 300, 10, 0, 0],
+        ]
+        result = analyze_record_level_data("Compensation & Benefits", columns, rows)
+        salary = next(row for row in result["summaries"] if row["Measure"] == "Base salary")
+        self.assertEqual(result["retained_records"], 2)
+        self.assertEqual(result["excluded_duplicate_employee_records"], 2)
+        self.assertEqual(result["data_quality"]["Duplicate employee IDs"], 1)
+        self.assertEqual(result["out_of_range_numeric_values"]["Base salary"], 1)
+        self.assertEqual(salary["Records with value"], 1)
+        self.assertEqual(salary["Mean"], 300)
+
+    def test_matched_performance_comparison_excludes_duplicate_employee_periods(self):
+        columns = ["employee_id", "department", "appraisal_period", "performance_rating", "goal_achievement"]
+        rows = [
+            ["E1", "A", "pre", 3, .7], [" E1 ", "A", "pre", 4, .8],
+            ["E1", "A", "post", 5, .9],
+            ["E2", "B", "pre", 2, .5], ["E2", "B", "post", 3, .6],
+        ]
+        result = analyze_record_level_data(
+            "Performance Management", columns, rows, pre_period="pre", post_period="post",
+        )
+        self.assertEqual(result["data_quality"]["Duplicate employee-period groups"], 1)
+        self.assertEqual(result["paired_period_comparison"]["Matched employees"], 1)
+        self.assertEqual(
+            result["paired_period_comparison"]["Ambiguous employee-period groups excluded"], 1,
+        )
 
 
 if __name__ == "__main__":
