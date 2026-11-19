@@ -2,7 +2,7 @@
 
 ## HR model, data, and validation enhancement
 
-- Corrected recruitment cost per hire to use funded-applicant expenditure and
+- Corrected recruitment cost per hire to use modeled funded-applicant spend and
   replaced the ambiguous time-to-fill estimate with person-day processing
   effort.
 - Separated exposure-based monthly, compounded annualized, period-workforce,
@@ -37,7 +37,7 @@
 
 ## Final-release hardening
 
-- Made recruitment actual-spend and cost-per-hire units explicit, handled
+- Made estimated recruitment-spend and cost-per-hire units explicit, handled
   zero-hire cases, and capped interview volume by configured interviewer
   capacity; retained processing effort as a person-day workload, not elapsed
   time-to-fill.

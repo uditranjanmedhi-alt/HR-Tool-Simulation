@@ -304,8 +304,8 @@ def render_insights(module: str, params: dict, result: dict) -> None:
             ("Bottleneck", f"{bottleneck[0]} → {bottleneck[1]} conversion is "
              f"{bottleneck[2] * 100:.1f}%, the lowest step in this funnel."),
             ("Manager action", "Test screening capacity and per-candidate effort assumptions; processing effort is not elapsed time-to-fill."),
-            ("Spend and unit cost",             f"Actual spend is INR {values['Actual Recruitment Spend (INR)']:,.2f}; cost per hire is {cost_summary}. "
-            f"Unused budget is INR {values['Budget (INR)'] - values['Actual Recruitment Spend (INR)']:,.2f}."),
+            ("Spend and unit cost", f"Estimated spend is INR {values['Estimated Recruitment Spend (INR)']:,.2f}; cost per hire is {cost_summary}. "
+             f"Unused budget is INR {values['Budget (INR)'] - values['Estimated Recruitment Spend (INR)']:,.2f}."),
         ]
     elif module == "Employee Attrition & Retention":
         rate = values["Annualized Attrition Rate (%)"]
@@ -1545,7 +1545,7 @@ def recommendation_items(module: str, values: dict) -> list[str]:
                 "and cost-per-applicant assumption before interpreting funnel outcomes."
             )
         if values["Cost per Hire (INR/hire)"] is None:
-            advice.append("Cost per hire is undefined because no employees joined; actual spend is still reported.")
+            advice.append("Cost per hire is undefined because no employees joined; estimated recruitment spend is still reported.")
     if module == "Learning & Development" and values.get("Training Completion Rate (%)", 0) < 70:
         advice.append("Investigate scheduling, relevance and manager support; simulated completion is below 70%.")
     if module == "Workforce Planning" and values.get("Workforce Gap", 0) > 0:
@@ -1793,7 +1793,7 @@ def render_documentation() -> None:
     st.subheader("Simulation methodology")
     st.markdown(
         """
-        - **Recruitment:** deterministic stage counts are floored sequentially. Funded applicants = min(applicants, floor(budget / cost per applicant)); actual spend = funded applicants × cost per applicant; cost per hire = actual spend / joined employees and is undefined when hires are zero. Recruitment processing effort sums screening and interview person-days and is not elapsed time-to-fill.
+        - **Recruitment:** deterministic stage counts are floored sequentially. Funded applicants = min(applicants, floor(budget / assumed cost per applicant)); estimated recruitment spend = funded applicants × assumed cost per applicant, not verified accounting expenditure; cost per hire = estimated recruitment spend / joined employees and is undefined when hires are zero. Recruitment processing effort sums screening and interview person-days and is not elapsed time-to-fill.
         - **Attrition:** each employee has mutually exclusive monthly voluntary, involuntary and retirement exit outcomes. Monthly workforce attrition = total exits / total opening-workforce employee-months. Annualized workforce attrition = 1 − (1 − pooled monthly rate)^12. Period workforce attrition compounds each month's exits / opening workforce. Original cohort exits and retention use only the starting employees; retention denominator is initial workforce.
         - **Learning & Development:** eligibility, participation, enrollment, completion and assessment are separate stages. Estimated financial benefit is passed assessments × observed score gain × configured value per point. ROI = (estimated benefit − training cost) / training cost; it is undefined for zero cost.
         - **Performance:** baseline ratings are normal draws clipped to 1–5, which changes the realized mean and adds boundary mass. A fixed assumed point effect is added to each draw and clipped again. The full reward budget is split equally across ratings of 4 or higher; no rewards are allocated if there are no qualifying ratings. These are assumptions, not causal estimates. Record-level mode can optionally compare matched employee ratings across periods and report group differences in mean change descriptively.

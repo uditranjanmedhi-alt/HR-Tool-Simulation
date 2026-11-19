@@ -8,10 +8,11 @@ descriptive path and does not convert individual records into scalar inputs.
 ## Recruitment & Talent Acquisition
 
 - Funded applicants = min(applicants, floor(recruitment budget / cost per applicant)).
-- Actual recruitment spend (INR) = funded applicants × cost per applicant.
-  Unused budget is not treated as expenditure.
-- Cost per hire (INR/hire) = actual recruitment spend / employees joined; it
-  is undefined when no employees join.
+- Estimated recruitment spend (INR) = funded applicants × assumed cost per
+  applicant. This modeled amount is not verified accounting expenditure;
+  unused budget is not treated as modeled spend.
+- Cost per hire (INR/hire) = estimated recruitment spend / employees joined;
+  it is undefined when no employees join.
 - Screened, shortlisted, interviewed, offered, accepted, and joined counts are
   computed sequentially with floors. Joined candidates are capped at vacancies.
 - Screening is capped at recruiters × scenario screening capacity; interview

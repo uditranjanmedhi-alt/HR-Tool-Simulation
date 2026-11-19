@@ -56,6 +56,30 @@ class DashboardDepartmentTests(unittest.TestCase):
             any(item.label == "Employees in department 6" for item in app.number_input)
         )
 
+    def test_scenario_comparison_renders_saved_scenarios_and_export(self):
+        app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
+        app.session_state["scenarios"] = [
+            {
+                "name": "Baseline",
+                "module": "Workforce Planning",
+                "seed": 42,
+                "kpis": [{"KPI": "Hiring Requirement", "Value": 2}],
+            },
+            {
+                "name": "Growth scenario",
+                "module": "Workforce Planning",
+                "seed": 42,
+                "kpis": [{"KPI": "Hiring Requirement", "Value": 4}],
+            },
+        ]
+        next(item for item in app.button if item.key == "nav_Scenario Comparison").click()
+        app.run()
+        self.assertFalse(app.exception, [item.message for item in app.exception])
+        self.assertTrue(any("Difference from baseline scenario" in item.value
+                            for item in app.caption))
+        self.assertIn("Download comparison (CSV)",
+                      [item.label for item in app.get("download_button")])
+
     def test_sidebar_modules_and_run_controls_render_without_exceptions(self):
         app = AppTest.from_file(str(APP_PATH), default_timeout=20).run()
         for module, module_key in MODULES.items():

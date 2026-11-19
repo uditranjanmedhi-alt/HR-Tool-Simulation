@@ -110,7 +110,7 @@ class SimulationCoreTests(unittest.TestCase):
         )
         self.assertTrue(any("do not establish" in note for note in baseline["notes"]))
 
-    def test_recruitment_cost_per_hire_uses_actual_spend_and_effort_units(self):
+    def test_recruitment_cost_per_hire_uses_estimated_spend_and_effort_units(self):
         params = {
             "vacancies": 20, "applicants": 5, "recruiters": 2, "interviewers": 2,
             "budget": 250, "cost_per_applicant": 100, "screen_rate": 1,
@@ -121,7 +121,7 @@ class SimulationCoreTests(unittest.TestCase):
         result = run_simulation("Recruitment & Talent Acquisition", params, seed=3)
         values = {row["KPI"]: row["Value"] for row in result["kpis"]}
         self.assertEqual(values["Candidates Within Recruitment Budget"], 2)
-        self.assertEqual(values["Actual Recruitment Spend (INR)"], 200)
+        self.assertEqual(values["Estimated Recruitment Spend (INR)"], 200)
         self.assertEqual(values["Cost per Hire (INR/hire)"], 100)
         self.assertEqual(values["Estimated Recruitment Processing Effort (person-days)"], 3)
 
@@ -129,8 +129,20 @@ class SimulationCoreTests(unittest.TestCase):
             "Recruitment & Talent Acquisition", {**params, "joining_rate": 0}, seed=3,
         )
         no_hire_values = {row["KPI"]: row["Value"] for row in no_hires["kpis"]}
-        self.assertEqual(no_hire_values["Actual Recruitment Spend (INR)"], 200)
+        self.assertEqual(no_hire_values["Estimated Recruitment Spend (INR)"], 200)
         self.assertIsNone(no_hire_values["Cost per Hire (INR/hire)"])
+
+    def test_recruitment_cost_per_hire_uses_unrounded_estimated_spend(self):
+        result = run_simulation("Recruitment & Talent Acquisition", {
+            "vacancies": 2, "applicants": 2, "recruiters": 1, "interviewers": 1,
+            "screen_capacity": 2, "interview_capacity": 2, "budget": 2.02,
+            "cost_per_applicant": 1.0051, "screen_rate": 1, "shortlist_rate": 1,
+            "dropout_rate": 0, "offer_rate": 1, "acceptance_rate": 1,
+            "joining_rate": 1, "screen_days": 0, "interview_days": 0,
+        }, seed=3)
+        values = {row["KPI"]: row["Value"] for row in result["kpis"]}
+        self.assertEqual(values["Estimated Recruitment Spend (INR)"], 2.01)
+        self.assertEqual(values["Cost per Hire (INR/hire)"], 1.01)
 
     def test_interviewer_capacity_limits_recruitment_funnel(self):
         params = {

@@ -18,17 +18,22 @@ environment:
 .\.venv\Scripts\python.exe -m pip check
 ```
 
-## Results (2026-11-19, final-release hardening)
+## Results (2026-11-19, final release correction)
 
 - `compileall -q .` completed successfully.
-- The complete unittest suite passed: 48 tests.
-- Streamlit AppTest passed for dashboard controls, all seven module runs and
-  methodology expanders, report generation and PDF charts for all seven modules,
-  Aggregate Parameter Mode, Record-Level Analysis Mode, missing-schema
-  handling, upload mapping/provenance, exports, Monte Carlo, and sensitivity.
+- The complete unittest suite passed: 50 tests.
 - `pip check` reported no broken requirements.
+- An additional seeded stress run completed 100,000 simulation executions
+  across all seven modules (seeds 0–99,999). Every run returned KPI and chart
+  data with finite numeric KPI values; recruitment runs also verified estimated
+  spend and cost per hire against the funded-applicant formula.
+- Streamlit AppTest passed for dashboard controls, all seven module runs and
+  methodology expanders, Aggregate Parameter Mode, Record-Level Analysis Mode,
+  upload mapping/provenance, scenario comparison, Monte Carlo, and sensitivity.
+  Report generation exercised CSV, Excel, and PDF payload creation for each
+  simulation module; download controls rendered without exceptions.
 
-Formula and boundary coverage includes recruitment expenditure from funded
+Formula and boundary coverage includes estimated recruitment spend from funded
 applicants, zero hires and interviewer capacity; separate attrition rates and
 original-cohort accounting; observation-horizon-scaled grievance arrivals,
 queue conservation, SLA denominators and censored waits; corrected learning
@@ -37,10 +42,7 @@ and range checks; bounded sensitivity inputs; stochastic reproducibility; and
 zero-volume boundaries. Upload limits and spreadsheet formula-injection
 protection are also covered.
 
-The project environment is Python 3.13 at `hr_simulate\\.venv`. Streamlit's
-dependency graph includes Pandas and PyArrow, but the active app path avoids
-Pandas-backed rendering. After publishing, the live Streamlit Community Cloud
-app was opened and verified to render the dashboard and the recruitment module,
-including the new interviewer-capacity input and methodology expander. A live
-check validates the published revision at that time; future deployments still
-require their own verification.
+The project environment is Python 3.13 at `hr_simulate\\.venv`. The local
+Streamlit process started successfully; its health endpoint and home page both
+returned HTTP 200. This verifies the locally tested revision. The hosted
+Streamlit Community Cloud app must be checked after this correction is published.

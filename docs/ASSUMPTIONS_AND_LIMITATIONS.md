@@ -5,8 +5,9 @@
 - A seed makes stochastic outputs reproducible for fixed code, parameters, and
   runtime behavior; it does not make assumptions empirically valid.
 - Recruitment is a deterministic aggregate funnel. Candidate funding uses the
-  configured cost per applicant; actual spend is funded applicants multiplied
-  by that cost. Cost per hire is undefined when there are no hires.
+  assumed cost per applicant; estimated recruitment spend is funded applicants
+  multiplied by that assumption and is not verified accounting expenditure.
+  Cost per hire is undefined when there are no hires.
 - Recruitment processing effort is the sum of screening and interview
   person-days. It is not calendar time-to-fill and does not model queueing,
   stage overlaps, or hiring dates.

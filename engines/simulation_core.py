@@ -154,7 +154,7 @@ def run_simulation(module: str, params: dict, seed: int = 42) -> dict:
         interview_days = float(params["interview_days"])
         if min(screen_days, interview_days) < 0:
             raise ValueError("Screening and interview effort must be non-negative.")
-        actual_spend = funded_applicants * cost_per_applicant
+        estimated_recruitment_spend = funded_applicants * cost_per_applicant
         processing_effort = screened * screen_days + interviewed * interview_days
         stages = ["Applicants", "Screened", "Shortlisted", "Interviewed", "Offers", "Joined"]
         counts = [applicants, screened, shortlisted, interviewed, offers, joined]
@@ -162,15 +162,15 @@ def run_simulation(module: str, params: dict, seed: int = 42) -> dict:
             "Vacancies": vacancies, "Applicants": applicants, "Employees Joined": joined,
             "Hiring Target Attainment (%)": round(100 * min(joined / vacancies, 1), 1) if vacancies else 0,
             "Estimated Recruitment Processing Effort (person-days)": round(processing_effort, 2),
-            "Actual Recruitment Spend (INR)": round(actual_spend, 2),
-            "Cost per Hire (INR/hire)": round(actual_spend / joined, 2) if joined else None,
+            "Estimated Recruitment Spend (INR)": round(estimated_recruitment_spend, 2),
+            "Cost per Hire (INR/hire)": round(estimated_recruitment_spend / joined, 2) if joined else None,
             "Offer Acceptance Rate (%)": round(100 * accepted / offers, 1) if offers else 0,
             "Recruitment Conversion (%)": round(100 * joined / applicants, 1) if applicants else 0,
             "Budget (INR)": round(budget, 2),
             "Candidates Within Recruitment Budget": funded_applicants,
         }, [{"Stage": stage, "Count": count} for stage, count in zip(stages, counts)],
-           [f"Actual recruitment spend is funded applicants ({funded_applicants}) × cost per applicant ({cost_per_applicant:g} INR); unused budget is not counted as spent.",
-            "Cost per hire (INR/hire) = actual recruitment spend ÷ employees joined; it is undefined when no employees join.",
+           [f"Estimated recruitment spend is funded applicants ({funded_applicants}) × assumed cost per applicant ({cost_per_applicant:g} INR); it is modeled, not verified accounting expenditure, and unused budget is not counted as spent.",
+            "Cost per hire (INR/hire) = estimated recruitment spend ÷ employees joined; it is undefined when no employees join.",
             "Recruitment processing effort (person-days) = screened × screening effort per candidate + interviewed × interview effort per candidate; it is not elapsed time-to-fill.",
             f"Screening volume is capped at recruiters × scenario screening capacity ({screening_capacity}); interview volume is capped at interviewers × scenario interview capacity ({interviewers * interview_capacity}).",
             "The funnel is deterministic: each stage is floored from the prior stage count and configured conversion assumption."])

@@ -8,9 +8,9 @@
 - Added dashboard indicators for workforce size, attrition, open positions, recruitment processing effort, training completion, and productivity, with illustrative workforce, attrition, recruitment, and department distribution visualizations. Removed the unsupported department-performance chart.
 - Added session-only dashboard controls to edit department names and headcounts, add/remove departments, and update the workforce distribution chart and total employee KPI.
 - Reorganized module controls into task-specific tabs and added consistent KPI cards, live previews, run/reset/save controls, result views, and manager insights.
-- Added recruitment conversion, recruiter workload, hiring outcome, actual-spend cost-per-hire, and person-day processing-effort views; capped joined candidates at the vacancy target to prevent overfilling.
+- Added recruitment conversion, recruiter workload, hiring outcome, estimated-spend cost-per-hire, and person-day processing-effort views; capped joined candidates at the vacancy target to prevent overfilling.
 - Implemented reproducible calculation flows and chart data for all seven HR modules.
-- Corrected attrition cohort tracking and separated monthly exposure-based, annualized, period-workforce, and original-cohort metrics. Corrected workforce planning productivity/FTE and monthly labour cost, assumption-based L&D ROI, recruitment expenditure, performance reward allocation, and employee-relations queue waiting/censoring.
+- Corrected attrition cohort tracking and separated monthly exposure-based, annualized, period-workforce, and original-cohort metrics. Corrected workforce planning productivity/FTE and monthly labour cost, assumption-based L&D ROI, estimated recruitment spend, performance reward allocation, and employee-relations queue waiting/censoring.
 - Final-release hardening clarified monetary KPI units, capped recruitment interviews by configured interviewer capacity, scaled Employee Relations arrivals to observation length, corrected SLA denominator disclosure, and added per-module methodology expanders.
 - Added configurable instant and staged-progress simulation modes.
 - Added module-appropriate Monte Carlo summaries for stochastic models and one-at-a-time sensitivity analysis for all seven modules.
